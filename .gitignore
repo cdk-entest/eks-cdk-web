@@ -6,3 +6,10 @@ node_modules
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+cdk8s
+package-lock.json
+imports
+jset.config.js 
+kubectl 
+.npmignore 
+.gitignore 
