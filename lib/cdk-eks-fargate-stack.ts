@@ -6,6 +6,7 @@ import { Construct } from "constructs";
 import * as cdk8s from "cdk8s";
 import * as fs from "fs";
 import * as yaml from "js-yaml";
+import { WebAppChart } from "./webapp-eks-chart";
 
 export function readYamlFromDir(dir: string, cluster: aws_eks.Cluster) {
   let previousResource: KubernetesManifest;
@@ -33,6 +34,7 @@ export function readYamlFromDir(dir: string, cluster: aws_eks.Cluster) {
 
 export interface CdkEksFargateStackProps extends StackProps {
   vpcId: string;
+  webImage: string;
 }
 
 export class CdkEksFargateStack extends Stack {
@@ -81,7 +83,13 @@ export class CdkEksFargateStack extends Stack {
     // readYamlFromDir("./cdk8s/dist/", cluster);
 
     // method 2: cdk8s integration chart
-    cluster.addCdk8sChart("my-chart", new MyChart(new cdk8s.App(), "MyChart"));
+    // cluster.addCdk8sChart("my-chart", new MyChart(new cdk8s.App(), "MyChart"));
+    cluster.addCdk8sChart(
+      "webapp",
+      new WebAppChart(new cdk8s.App(), "WebAppChart", {
+        image: props.webImage,
+      })
+    );
   }
 }
 
