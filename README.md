@@ -174,6 +174,60 @@ spec:
             - containerPort: 8080
 ```
 
+## Horizontal Scaling
+
+following the kubernetes docs [HERE] to see how to create a Horizontal Pod AutoScaler
+
+```yaml
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cdk8s-webhorizontalautoscaler-c8c254b6
+spec:
+  maxReplicas: 5
+  metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 85
+          type: Utilization
+      type: Resource
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hello-k8s
+```
+
+create the HPA using cdk8s as
+
+```ts
+new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
+  spec: {
+    minReplicas: 2,
+    maxReplicas: 5,
+    scaleTargetRef: {
+      apiVersion: "apps/v1",
+      kind: "Deployment",
+      name: "hello-k8s",
+    },
+    // default 80% cpu utilization
+    metrics: [
+      {
+        type: "Resource",
+        resource: {
+          name: "cpu",
+          target: {
+            type: "Utilization",
+            averageUtilization: 85,
+          },
+        },
+      },
+    ],
+  },
+});
+```
+
 ## Troubleshotting
 
 Ensure that the role which used to create the EKS cluster and the role used to access the cluster are the same. In case of CDK deploy, the output from CDK terminal look like this

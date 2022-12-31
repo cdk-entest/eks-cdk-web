@@ -54,7 +54,6 @@ export class CdkEksFargateStack extends Stack {
     // readYamlFromDir("./cdk8s/dist/", cluster);
 
     // method 2: cdk8s integration chart
-    // cluster.addCdk8sChart("my-chart", new MyChart(new cdk8s.App(), "MyChart"));
     cluster.addCdk8sChart(
       "webapp",
       new WebAppChart(new cdk8s.App(), "WebAppChart", {
