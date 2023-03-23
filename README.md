@@ -40,9 +40,16 @@ cluster.addNodegroupCapacity("MyNodeGroup", {
 
 we need to understand there are three roles 
 
-- creation role which is assumed by CDK in this case. Later on we configure our local with the creation role to kubectl into the cluster 
-- role which is assumed by the cluster on behalf of us to access aws resources 
+- creation role which is assumed by CDK in this case 
+- cluster role which is assumed by the cluster on behalf of us to access aws resources 
 - master role which is added to kubernetes RBAC 
+
+to kubectl into the cluster, we need to configure out client with the creation role. Please look up this role in CloudFormation
+
+```bash
+aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445566:role/yyyyy
+Added new context arn:aws:eks:rrrrr:112233445566:cluster/cluster-xxxxx to /home/boom/.kube/config
+```
 
 ## Deploy by Adding Manifest (YAML)
 
