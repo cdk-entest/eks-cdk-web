@@ -37,6 +37,7 @@ export class WebAppChart extends Chart {
             containers: [
               {
                 name: "hello-kubernetes",
+                // image: "paulbouwer/hello-kubernetes:1.7",
                 image: props.image,
                 ports: [{ containerPort: 8080 }],
               },
