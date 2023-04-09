@@ -12,6 +12,7 @@ date:
 - Deploy by adding manifest in yaml
 - Deploy by CDK8s construct
 - Expose a service via ALB
+- Update kube-config (CDK output noted)
 
 ## Project Structure
 
