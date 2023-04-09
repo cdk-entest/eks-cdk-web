@@ -76,6 +76,12 @@ then check the project structure as below
    |--cdk-eks-fargate-stack.ts
    |--network-stack.ts
    |--webapp-eks-chart.ts
+|--webapp
+   |--Dockerfile
+   |--app.y
+   |--requirements.txt
+   |-static
+   |--templates
 |--package.json
 ```
 
@@ -306,6 +312,65 @@ new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
   },
 });
 ```
+
+## Build Docker Image
+
+install docker engine
+
+```bash
+https://docs.docker.com/engine/install/ubuntu/
+```
+
+build my image
+
+```bash
+docker build -t flask-app .
+```
+
+run docker image
+
+```bash
+docker run -d -p 3000:3000 flask-app:latest
+```
+
+list docker running
+
+```bash
+docker ps
+```
+
+stop all running containers
+
+```bash
+docker kill $(docker ps -q)
+```
+
+delete all docker images
+
+```bash
+docker system prune -a
+
+```
+
+docker ecr log in
+
+```bash
+aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 642644951129.dkr.ecr.us-east-1.amazonaws.com
+```
+
+tag image
+
+```bash
+sudo docker tag 121345bea3b3 642644951129.dkr.ecr.us-east-1.amazonaws.com/flask-app:latest
+```
+
+push image to ecr
+
+```bash
+sudo docker push 642644951129.dkr.ecr.us-east-1.amazonaws.com/flask-app:latest
+```
+
+please go to aws ecr console and create flask-app repository
 
 ## Troubleshotting
 
