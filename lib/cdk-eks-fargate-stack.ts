@@ -4,7 +4,7 @@ import * as cdk8s from "cdk8s";
 import { WebAppChart } from "./webapp-eks-chart";
 
 export interface CdkEksFargateStackProps extends StackProps {
-  vpcId: string;
+  vpc: aws_ec2.Vpc;
   webImage: string;
 }
 
@@ -12,19 +12,13 @@ export class CdkEksFargateStack extends Stack {
   constructor(scope: Construct, id: string, props: CdkEksFargateStackProps) {
     super(scope, id, props);
 
-    // lookup existing vpc
-    const vpc = aws_ec2.Vpc.fromLookup(this, "LookUpVpc", {
-      vpcId: props.vpcId,
-      vpcName: "DevDemo",
-    });
-
     // create a cluster
     const cluster = new aws_eks.Cluster(this, "HelloCluster", {
       version: aws_eks.KubernetesVersion.V1_21,
       clusterName: "HelloCluster",
       outputClusterName: true,
       endpointAccess: aws_eks.EndpointAccess.PUBLIC,
-      vpc: vpc,
+      vpc: props.vpc,
       vpcSubnets: [{ subnetType: aws_ec2.SubnetType.PUBLIC }],
       defaultCapacity: 0,
     });

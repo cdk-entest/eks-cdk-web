@@ -13,6 +13,72 @@ date:
 - Deploy by CDK8s construct
 - Expose a service via ALB
 
+## Project Structure
+
+init a cdk project by command
+
+```bash
+cdk init
+```
+
+then also install dependencies for cdk8s
+
+```bash
+npm install package.json
+```
+
+package.json
+
+```json
+{
+  "name": "cdk-eks-fargate",
+  "version": "0.1.0",
+  "bin": {
+    "cdk-eks-fargate": "bin/cdk-eks-fargate.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "@types/jest": "^27.5.2",
+    "@types/js-yaml": "^4.0.5",
+    "@types/node": "10.17.27",
+    "@types/prettier": "2.6.0",
+    "aws-cdk": "2.67.0",
+    "jest": "^27.5.1",
+    "ts-jest": "^27.1.4",
+    "ts-node": "^10.9.1",
+    "typescript": "~3.9.7"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.67.0",
+    "cdk8s": "^2.5.86",
+    "cdk8s-plus-24": "^2.3.7",
+    "constructs": "^10.0.0",
+    "js-yaml": "^4.1.0",
+    "package.json": "^2.0.1",
+    "source-map-support": "^0.5.21"
+  }
+}
+```
+
+then check the project structure as below
+
+```ts
+|--bin
+   |--cdk-eks-fargate.ts
+|--imports
+   |--k8s.ts
+|--lib
+   |--cdk-eks-fargate-stack.ts
+   |--network-stack.ts
+   |--webapp-eks-chart.ts
+|--package.json
+```
+
 ## Create a EKS Cluster
 
 create a eks cluster
@@ -38,11 +104,11 @@ cluster.addNodegroupCapacity("MyNodeGroup", {
 });
 ```
 
-we need to understand there are three roles 
+we need to understand there are three roles
 
-- creation role which is assumed by CDK in this case 
-- cluster role which is assumed by the cluster on behalf of us to access aws resources 
-- master role which is added to kubernetes RBAC 
+- creation role which is assumed by CDK in this case
+- cluster role which is assumed by the cluster on behalf of us to access aws resources
+- master role which is added to kubernetes RBAC
 
 to kubectl into the cluster, we need to configure out client with the creation role. Please look up this role in CloudFormation
 
@@ -258,10 +324,10 @@ aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445
 Added new context arn:aws:eks:rrrrr:112233445566:cluster/cluster-xxxxx to /home/boom/.kube/config
 ```
 
-It is possible to find the creation role in the cloudformation stack 
+It is possible to find the creation role in the cloudformation stack
 
+## Reference
 
-## Reference 
+- [amazon eks cdk](https://aws.amazon.com/blogs/architecture/field-notes-managing-an-amazon-eks-cluster-using-aws-cdk-and-cloud-resource-property-manager/)
 
-[amazon eks cdk](https://aws.amazon.com/blogs/architecture/field-notes-managing-an-amazon-eks-cluster-using-aws-cdk-and-cloud-resource-property-manager/)
-
+- [cdk chart example](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_eks-readme.html#cdk8s-charts)

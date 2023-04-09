@@ -1,14 +1,27 @@
 #!/usr/bin/env node
-import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { CdkEksFargateStack } from "../lib/cdk-eks-fargate-stack";
+import { VpcStack } from "../lib/network-stack";
 
+const region = "us-east-1";
 const app = new cdk.App();
-new CdkEksFargateStack(app, "CdkEksFargateStack", {
-  vpcId: "vpc-07cafc6a819930727",
-  webImage: `${process.env.CDK_DEFAULT_ACCOUNT}.dkr.ecr.ap-southeast-1.amazonaws.com/flask-app-demo`,
+
+const network = new VpcStack(app, "NetworkStack", {
+  cidr: "10.0.0.0/16",
+  name: "Network",
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: "ap-southeast-1",
+    region: region,
   },
 });
+
+const cluster = new CdkEksFargateStack(app, "CdkEksFargateStack", {
+  vpc: network.vpc,
+  webImage: `${process.env.CDK_DEFAULT_ACCOUNT}.dkr.ecr.${region}.amazonaws.com/flask-app-demo`,
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: region,
+  },
+});
+
+cluster.addDependency(network);
