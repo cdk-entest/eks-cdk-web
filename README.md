@@ -314,6 +314,132 @@ new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
 });
 ```
 
+## Develop with CDK8S
+
+install cdk8s
+
+```bash
+npm install -g cdk8s-cli
+```
+
+create a new cdk8s-app directory
+
+```bash
+mkdir cdk8s-app
+```
+
+and then init a new cdk8s project
+
+```bash
+cdk8s init typescript-app
+```
+
+project structure
+
+```
+|--bin
+   |--cdk-eks-fargate.ts
+|--lib
+   |--eks-cluster-stack.ts
+   |--network-stack.ts
+|--cdk8s-app
+   |--dist
+   |--imports
+   |--main.ts
+```
+
+synthesize from ts to yaml
+
+```bash
+cdk8s --app 'npx ts-node main.ts' synth
+```
+
+develop an service and auto-scaling
+
+```ts
+import { App, Chart, ChartProps } from "cdk8s";
+import {
+  IntOrString,
+  KubeDeployment,
+  KubeService,
+  KubeHorizontalPodAutoscalerV2Beta2,
+} from "./imports/k8s";
+import { Construct } from "constructs";
+
+interface WebAppChartProps extends ChartProps {
+  image: string;
+}
+
+export class WebAppChart extends Chart {
+  constructor(scope: Construct, id: string, props: WebAppChartProps) {
+    super(scope, id, props);
+
+    const label = { app: "hello-k8s" };
+
+    new KubeService(this, "service", {
+      spec: {
+        type: "LoadBalancer",
+        ports: [{ port: 80, targetPort: IntOrString.fromNumber(8080) }],
+        selector: label,
+      },
+    });
+
+    new KubeDeployment(this, "deployment", {
+      spec: {
+        replicas: 2,
+        selector: {
+          matchLabels: label,
+        },
+        template: {
+          metadata: { labels: label },
+          spec: {
+            containers: [
+              {
+                name: "hello-kubernetes",
+                // image: "paulbouwer/hello-kubernetes:1.7",
+                image: props.image,
+                ports: [{ containerPort: 8080 }],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
+      spec: {
+        minReplicas: 2,
+        maxReplicas: 5,
+        scaleTargetRef: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          name: "hello-k8s",
+        },
+        // default 80% cpu utilization
+        metrics: [
+          {
+            type: "Resource",
+            resource: {
+              name: "cpu",
+              target: {
+                type: "Utilization",
+                averageUtilization: 85,
+              },
+            },
+          },
+        ],
+      },
+    });
+  }
+}
+
+const app = new App();
+new WebAppChart(app, "cdk8s-app", {
+  image: "$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/flask-web:latest",
+});
+app.synth();
+```
+
 ## Build Docker Image
 
 install docker engine
@@ -375,10 +501,16 @@ please go to aws ecr console and create flask-app repository
 
 ## Observability
 
+Ensure that nodes has permissions to send metrics to cloudwatch [here](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-prerequisites.html) by attaching the following aws managed policy to nodes.
+
+```json
+ CloudWatchAgentServerPolicy
+```
+
 Follow [this](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-setup-EKS-quickstart.html) to quick start create CloudWatch agent and Fluentbit which send metrics and logs to CloudWatch
 
 ```bash
-ClusterName=HelloCluster
+ClusterName=EksDemo
 RegionName=us-east-1
 FluentBitHttpPort='2020'
 FluentBitReadFromHead='Off'
@@ -391,6 +523,50 @@ delete the Container Insight
 
 ```bash
 curl https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluent-bit-quickstart.yaml | sed 's/{{cluster_name}}/'${ClusterName}'/;s/{{region_name}}/'${LogRegion}'/;s/{{http_server_toggle}}/"'${FluentBitHttpServer}'"/;s/{{http_server_port}}/"'${FluentBitHttpPort}'"/;s/{{read_from_head}}/"'${FluentBitReadFromHead}'"/;s/{{read_from_tail}}/"'${FluentBitReadFromTail}'"/' | kubectl delete -f -
+```
+
+## Kube Config
+
+create kube config (if you already deleted it)
+
+```bash
+aws eks update-kubeconfig --region region-code --name my-cluster
+```
+
+if the cluster created by CDK or cloudformation, so we need to update the kube configu with the execution role.
+
+```bash
+aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445566:role/yyyyy
+```
+
+there are some ways to find the role arn
+
+- from cloudformation CDK bootstrap
+- from CDK terminal output
+- query EKS cluster loggroup given that authenticator log enabled
+
+ensure than the execution role can be assumed by AWS account from your termial
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudformation.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    },
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::$ACCOUNT:role/TeamRole"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
 ```
 
 ## Troubleshotting
@@ -410,7 +586,11 @@ aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445
 Added new context arn:aws:eks:rrrrr:112233445566:cluster/cluster-xxxxx to /home/boom/.kube/config
 ```
 
-It is possible to find the creation role in the cloudformation stack
+Shell into a busybox and wget the service
+
+```bash
+kubectl run busybox --image=busybox --rm -it --command -- bin/sh
+```
 
 ## Reference
 
@@ -421,3 +601,5 @@ It is possible to find the creation role in the cloudformation stack
 - [aws managed node group](https://aws.amazon.com/blogs/containers/leveraging-amazon-eks-managed-node-group-with-placement-group-for-low-latency-critical-applications/)
 
 - [kubernetes pod select node label](https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/)
+
+- [kube config update](https://docs.aws.amazon.com/eks/latest/userguide/create-kubeconfig.html)
