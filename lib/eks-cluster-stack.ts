@@ -135,6 +135,15 @@ export class EksClusterStack extends Stack {
           maxSize: 5,
           minSize: 1,
         },
+        // update configuration
+        updateConfig: {
+          maxUnavailable: 1,
+          // maxUnavailablePercentage: 30,
+        },
+        // label configuration
+        labels: {
+          environment: "dev",
+        },
       }
     );
 
