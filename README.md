@@ -374,7 +374,7 @@ export class WebAppChart extends Chart {
   constructor(scope: Construct, id: string, props: WebAppChartProps) {
     super(scope, id, props);
 
-    const label = { app: "hello-k8s" };
+    const label = { app: "hello-cdk8s" };
 
     new KubeService(this, "service", {
       spec: {
@@ -413,7 +413,7 @@ export class WebAppChart extends Chart {
         scaleTargetRef: {
           apiVersion: "apps/v1",
           kind: "Deployment",
-          name: "hello-k8s",
+          name: "hello-cdk8s",
         },
         // default 80% cpu utilization
         metrics: [
