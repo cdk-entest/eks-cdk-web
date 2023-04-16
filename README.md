@@ -13,6 +13,7 @@ date:
 - Deploy by CDK8s construct
 - Expose a service via ALB
 - Update kube-config (CDK output noted)
+- Monitor with CloudWatch Container Insight
 
 ## Project Structure
 

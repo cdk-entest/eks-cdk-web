@@ -7,7 +7,7 @@ spec:
     - port: 80
       targetPort: 8080
   selector:
-    app: hello-k8s
+    app: hello-cdk8s
   type: LoadBalancer
 ---
 apiVersion: apps/v1
@@ -18,14 +18,14 @@ spec:
   replicas: 2
   selector:
     matchLabels:
-      app: hello-k8s
+      app: hello-cdk8s
   template:
     metadata:
       labels:
-        app: hello-k8s
+        app: hello-cdk8s
     spec:
       containers:
-        - image: ""
+        - image: 700267065772.dkr.ecr.us-east-1.amazonaws.com/flask-web:latest
           name: hello-kubernetes
           ports:
             - containerPort: 8080
@@ -47,4 +47,4 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: hello-k8s
+    name: hello-cdk8s
