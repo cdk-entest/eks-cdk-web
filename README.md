@@ -503,10 +503,17 @@ please go to aws ecr console and create flask-app repository
 
 ## Observability
 
+Install metrics server [here](https://docs.aws.amazon.com/eks/latest/userguide/metrics-server.html)
+
+```bash 
+kubectl top pods 
+kubectl top nodes 
+```
+
 Ensure that nodes has permissions to send metrics to cloudwatch [here](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-prerequisites.html) by attaching the following aws managed policy to nodes.
 
-```json
- CloudWatchAgentServerPolicy
+```ts
+CloudWatchAgentServerPolicy 
 ```
 
 Follow [this](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-setup-EKS-quickstart.html) to quick start create CloudWatch agent and Fluentbit which send metrics and logs to CloudWatch
@@ -605,3 +612,5 @@ kubectl run busybox --image=busybox --rm -it --command -- bin/sh
 - [kubernetes pod select node label](https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/)
 
 - [kube config update](https://docs.aws.amazon.com/eks/latest/userguide/create-kubeconfig.html)
+
+- [install metrics server](https://docs.aws.amazon.com/eks/latest/userguide/metrics-server.html)
