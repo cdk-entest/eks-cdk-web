@@ -14,6 +14,7 @@ date:
 - Expose a service via ALB
 - Update kube-config (CDK output noted)
 - Monitor with CloudWatch Container Insight
+- Please create key-pair for ec2 node (sorry)
 
 ## Project Structure
 
