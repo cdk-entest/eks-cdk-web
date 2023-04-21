@@ -601,6 +601,15 @@ Shell into a busybox and wget the service
 kubectl run busybox --image=busybox --rm -it --command -- bin/sh
 ```
 
+## Load Test 
+
+```bash 
+artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
+kubect get hpa --watch 
+kubect top pod -n default 
+kubect top node 
+```
+
 ## Reference
 
 - [amazon eks cdk](https://aws.amazon.com/blogs/architecture/field-notes-managing-an-amazon-eks-cluster-using-aws-cdk-and-cloud-resource-property-manager/)
