@@ -626,3 +626,4 @@ kubect top node
 
 - [CDK EKS workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/c15012ac-d05d-46b1-8a4a-205e7c9d93c9/en-US/40-deploy-clusters/300-container/330-chart)
 
+- [read yaml file](https://github.com/yjw113080/aws-cdk-eks-multi-region-skeleton/blob/master/utils/read-file.ts)
