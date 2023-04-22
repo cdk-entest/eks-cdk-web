@@ -505,15 +505,15 @@ please go to aws ecr console and create flask-app repository
 
 Install metrics server [here](https://docs.aws.amazon.com/eks/latest/userguide/metrics-server.html)
 
-```bash 
-kubectl top pods 
-kubectl top nodes 
+```bash
+kubectl top pods
+kubectl top nodes
 ```
 
 Ensure that nodes has permissions to send metrics to cloudwatch [here](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-prerequisites.html) by attaching the following aws managed policy to nodes.
 
 ```ts
-CloudWatchAgentServerPolicy 
+CloudWatchAgentServerPolicy;
 ```
 
 Follow [this](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-setup-EKS-quickstart.html) to quick start create CloudWatch agent and Fluentbit which send metrics and logs to CloudWatch
@@ -601,13 +601,13 @@ Shell into a busybox and wget the service
 kubectl run busybox --image=busybox --rm -it --command -- bin/sh
 ```
 
-## Load Test 
+## Load Test
 
-```bash 
+```bash
 artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
-kubect get hpa --watch 
-kubect top pod -n default 
-kubect top node 
+kubect get hpa --watch
+kubect top pod -n default
+kubect top node
 ```
 
 ## Reference
@@ -623,3 +623,6 @@ kubect top node
 - [kube config update](https://docs.aws.amazon.com/eks/latest/userguide/create-kubeconfig.html)
 
 - [install metrics server](https://docs.aws.amazon.com/eks/latest/userguide/metrics-server.html)
+
+- [CDK EKS workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/c15012ac-d05d-46b1-8a4a-205e7c9d93c9/en-US/40-deploy-clusters/300-container/330-chart)
+

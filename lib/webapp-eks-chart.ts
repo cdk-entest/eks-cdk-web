@@ -1,4 +1,4 @@
-import { Chart, ChartProps } from "cdk8s";
+import { App, Chart, ChartProps } from "cdk8s";
 import {
   IntOrString,
   KubeDeployment,
@@ -37,8 +37,8 @@ export class WebAppChart extends Chart {
             containers: [
               {
                 name: "hello-kubernetes",
-                // image: "paulbouwer/hello-kubernetes:1.7",
-                image: props.image,
+                image: "paulbouwer/hello-kubernetes:1.7",
+                // image: props.image,
                 ports: [{ containerPort: 8080 }],
               },
             ],
