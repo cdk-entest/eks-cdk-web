@@ -10,7 +10,7 @@ export interface CdkEksFargateStackProps extends StackProps {
 }
 
 export class CdkEksFargateStack extends Stack {
-  public readonly cluster: aws_eks.ICluster;
+  public readonly cluster: aws_eks.Cluster;
 
   constructor(scope: Construct, id: string, props: CdkEksFargateStackProps) {
     super(scope, id, props);
@@ -43,7 +43,25 @@ export class CdkEksFargateStack extends Stack {
       capacityType: aws_eks.CapacityType.ON_DEMAND,
     });
 
-    // deployment manifest
+    // create a cdk8s chart
+    //    const chart = new WebAppChart(new App(), "TestWebAppChart", { image: "" });
+    //   cluster.addCdk8sChart("TestWebAppChart", chart);
+
+    // export output
+    this.cluster = cluster;
+  }
+}
+
+interface DeployChartProps extends StackProps {
+  cluster: aws_eks.Cluster;
+}
+
+export class DeployChartStack extends Stack {
+  constructor(scope: Construct, id: string, props: DeployChartProps) {
+    super(scope, id, props);
+
+    const cluster = props.cluster;
+
     const deployment = {
       apiVersion: "apps/v1",
       kind: "Deployment",
@@ -66,30 +84,11 @@ export class CdkEksFargateStack extends Stack {
       },
     };
 
-//    new aws_eks.KubernetesManifest(this, "HelloManifest", {
-//      cluster,
-//      manifest: [deployment],
-//    });
+    cluster.addManifest("HelloManifest", deployment);
 
-    // create a cdk8s chart
-//    const chart = new WebAppChart(new App(), "TestWebAppChart", { image: "" });
- //   cluster.addCdk8sChart("TestWebAppChart", chart);
-
-    // export output
-    this.cluster = cluster;
-  }
-}
-
-interface DeployChartProps extends StackProps {
-  cluster: aws_eks.ICluster;
-}
-
-export class DeployChartStack extends Stack {
-  constructor(scope: Construct, id: string, props: DeployChartProps) {
-    super(scope, id, props);
-
-    const chart = new WebAppChart(new App(), "WebAppChart", { image: "" });
-
-    props.cluster.addCdk8sChart("WebAppChart", chart);
+    cluster.addCdk8sChart(
+      "TestWebAppChart",
+      new WebAppChart(new App(), "TestWebAppChart", { image: "" })
+    );
   }
 }
