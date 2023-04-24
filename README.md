@@ -601,6 +601,25 @@ Shell into a busybox and wget the service
 kubectl run busybox --image=busybox --rm -it --command -- bin/sh
 ```
 
+After using CDK to deploy a yaml manifest,
+
+```ts
+cluster.addManifest("HelloDeployment", deployment);
+```
+
+then if we update the deployment yaml and CDK deploy againt, [error appear](https://github.com/aws/aws-cdk/issues/15072), this is due to mismatch, hardcode of Lambda layer, please fix it
+
+```bash
+npm install @aws-cdk/lambda-layer-kubectl-v24
+```
+
+then update cluster stack
+
+```ts
+ version: aws_eks.KubernetesVersion.V1_24,
+kubectlLayer: new KubectlV24Layer(this, "kubectlLayer")
+```
+
 ## Load Test
 
 ```bash
@@ -626,4 +645,14 @@ kubect top node
 
 - [CDK EKS workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/c15012ac-d05d-46b1-8a4a-205e7c9d93c9/en-US/40-deploy-clusters/300-container/330-chart)
 
-- [read yaml file](https://github.com/yjw113080/aws-cdk-eks-multi-region-skeleton/blob/master/utils/read-file.ts)
+- [read yaml file](https://github.com/yjw113080/aws-cdk-eks-multi-region-skeleton/blob/master/utils/read-file)
+
+- [error lambda KubectlLayer](https://github.com/aws/aws-cdk/issues/15072)
+
+- [fix error lambda KubectlLayer](https://github.com/cdklabs/awscdk-asset-kubectl)
+
+```
+CdkEksFargateStack.EksClusterLevel2ClusterName5A4A7685 = EksClusterLevel2
+CdkEksFargateStack.EksClusterLevel2ConfigCommand393D8FC7 = aws eks update-kubeconfig --name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
+CdkEksFargateStack.EksClusterLevel2GetTokenCommandA1DFFD22 = aws eks get-token --cluster-name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
+```
