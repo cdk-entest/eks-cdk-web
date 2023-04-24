@@ -1,7 +1,10 @@
-import { aws_ec2, aws_eks, Stack, StackProps } from "aws-cdk-lib";
+import { aws_ec2, aws_eks, Stack, StackProps, aws_iam } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { WebAppChart } from "./webapp-eks-chart";
 import { App } from "cdk8s";
+import * as path from "path";
+import { readYamlFile } from "../utils/read_yaml";
+import { KubectlV24Layer } from "@aws-cdk/lambda-layer-kubectl-v24"
 
 export interface CdkEksFargateStackProps extends StackProps {
   clusterName: string;
@@ -15,9 +18,38 @@ export class CdkEksFargateStack extends Stack {
   constructor(scope: Construct, id: string, props: CdkEksFargateStackProps) {
     super(scope, id, props);
 
+    // node role
+    const nodeRole = new aws_iam.Role(this, "RoleForEksNode", {
+      roleName: "RoleForEksNode",
+      assumedBy: new aws_iam.ServicePrincipal("ec2.amazonaws.com"),
+    });
+
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "CloudWatchAgentServerPolicy"
+      )
+    );
+
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "AmazonEKSWorkerNodePolicy"
+      )
+    );
+
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "AmazonEC2ContainerRegistryReadOnly"
+      )
+    );
+
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEKS_CNI_Policy")
+    );
+
     // create a cluster
     const cluster = new aws_eks.Cluster(this, props.clusterName, {
-      version: aws_eks.KubernetesVersion.V1_23,
+      version: aws_eks.KubernetesVersion.V1_24,
+      kubectlLayer: new KubectlV24Layer(this, "kubectlLayer"),
       clusterName: props.clusterName,
       outputClusterName: true,
       endpointAccess: aws_eks.EndpointAccess.PUBLIC,
@@ -41,11 +73,8 @@ export class CdkEksFargateStack extends Stack {
       desiredSize: 3,
       maxSize: 5,
       capacityType: aws_eks.CapacityType.ON_DEMAND,
+      nodeRole: nodeRole,
     });
-
-    // create a cdk8s chart
-    //    const chart = new WebAppChart(new App(), "TestWebAppChart", { image: "" });
-    //   cluster.addCdk8sChart("TestWebAppChart", chart);
 
     // export output
     this.cluster = cluster;
@@ -90,5 +119,19 @@ export class DeployChartStack extends Stack {
       "TestWebAppChart",
       new WebAppChart(new App(), "TestWebAppChart", { image: "" })
     );
+  }
+}
+
+interface MetricServerProps extends StackProps {
+  cluster: aws_eks.Cluster;
+}
+
+export class MetricServerStack extends Stack {
+  constructor(scope: Construct, id: string, props: MetricServerProps) {
+    super(scope, id, props);
+
+    const cluster = props.cluster;
+
+    readYamlFile(path.join(__dirname, "./../yaml/metric_server.yaml"), cluster);
   }
 }

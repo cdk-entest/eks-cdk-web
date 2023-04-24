@@ -2,6 +2,7 @@ import * as cdk from "aws-cdk-lib";
 import {
   CdkEksFargateStack,
   DeployChartStack,
+  MetricServerStack,
 } from "../lib/eks-cluster-level2-stack";
 import { VpcStack } from "../lib/network-stack";
 
@@ -26,9 +27,14 @@ const eks = new CdkEksFargateStack(app, "CdkEksFargateStack", {
   },
 });
 
-// const deploy = new DeployChartStack(app, "DeployChartStack", {
-//   cluster: eks.cluster,
-// });
+const deploy = new DeployChartStack(app, "DeployChartStack", {
+  cluster: eks.cluster,
+});
+
+const metricServer = new MetricServerStack(app, "MetricServerStack", {
+  cluster: eks.cluster,
+});
 
 eks.addDependency(network);
-// deploy.addDependency(eks);
+deploy.addDependency(eks);
+metricServer.addDependency(eks);
