@@ -25,26 +25,32 @@ spec:
         app: hello-cdk8s
     spec:
       containers:
-        - image: 700267065772.dkr.ecr.us-east-1.amazonaws.com/flask-web:latest
+        # - image: 351026122654.dkr.ecr.us-east-1.amazonaws.com/flask-web:latest
+        - image: "paulbouwer/hello-kubernetes:1.7"
           name: hello-kubernetes
           ports:
             - containerPort: 8080
+          resources:
+            limits:
+              cpu: 100m
+            requests:
+              cpu: 100m
 ---
 apiVersion: autoscaling/v2beta2
 kind: HorizontalPodAutoscaler
 metadata:
   name: cdk8s-app-webhorizontalautoscaler-c82a277e
 spec:
-  maxReplicas: 5
+  maxReplicas: 100
   metrics:
     - resource:
         name: cpu
         target:
-          averageUtilization: 85
+          averageUtilization: 5
           type: Utilization
       type: Resource
   minReplicas: 2
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: hello-cdk8s
+    name: cdk8s-app-deployment-c8f953f2
