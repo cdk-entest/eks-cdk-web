@@ -554,6 +554,11 @@ there are some ways to find the role arn
 - from CDK terminal output
 - query EKS cluster loggroup given that authenticator log enabled
 
+or check output of cloudformation for CdkEksFargateStack 
+- this role is binded as admin in Kubernetes 
+- need to add policies (ListClusters) before can use it in AWS console 
+
+
 ensure than the execution role can be assumed by AWS account from your termial
 
 ```json
