@@ -733,6 +733,8 @@ kubect top node
 - [KuberServed resource](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/)
 
 - [aws-auth configmap](https://docs.aws.amazon.com/eks/latest/userguide/add-user-role.html)
+
+- [system:master kubernetes](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
 ```
 CdkEksFargateStack.EksClusterLevel2ClusterName5A4A7685 = EksClusterLevel2
 CdkEksFargateStack.EksClusterLevel2ConfigCommand393D8FC7 = aws eks update-kubeconfig --name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
