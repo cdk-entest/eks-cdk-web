@@ -73,7 +73,7 @@ export class CdkEksFargateStack extends Stack {
       subnets: { subnetType: aws_ec2.SubnetType.PUBLIC },
       minSize: 2,
       desiredSize: 3,
-      maxSize: 5,
+      maxSize: 20,
       capacityType: aws_eks.CapacityType.ON_DEMAND,
       nodeRole: nodeRole,
     });
