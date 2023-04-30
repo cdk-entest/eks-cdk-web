@@ -620,7 +620,79 @@ then update cluster stack
 kubectlLayer: new KubectlV24Layer(this, "kubectlLayer")
 ```
 
-## Load Test
+## AutoScaler and Load Test  
+
+Install the AutoScaler, for simple demo 
+
+- Update role for ec2 node, so it can scale the autoscaling group 
+- More secure way is to use service account 
+- Install AutoScaler by reading yaml and add to the cluster by CDK 
+
+Update role for ec2 node 
+
+```ts
+const policyStatement = new iam.PolicyStatement();
+policyStatement.addResources("*");
+policyStatement.addActions(
+  "autoscaling:DescribeAutoScalingGroups",
+  "autoscaling:DescribeAutoScalingInstances",
+  "autoscaling:DescribeLaunchConfigurations",
+  "autoscaling:DescribeTags",
+  "autoscaling:SetDesiredCapacity",
+  "autoscaling:TerminateInstanceInAutoScalingGroup",
+  "ec2:DescribeLaunchTemplateVersions"
+);
+
+// create the policy based on the statements
+const policy = new iam.Policy(this, "cluster-autoscaler-policy", {
+  policyName: "ClusterAutoscalerPolicy",
+  statements: [policyStatement],
+});
+```
+
+Update autoscaling tags 
+
+```ts 
+props.nodeGroups.forEach((element) => {
+  new Tag(
+    "k8s.io/cluster-autoscaler/" + props.cluster.clusterName,
+    "owned",
+    { applyToLaunchedInstances: true }
+  );
+
+  new Tag("k8s.io/cluster-autoscaler/enabled", "true", {
+    applyToLaunchedInstances: true,
+  });
+  policy.attachToRole(element.role);
+});
+```
+
+Read AutoScaler yaml 
+
+```ts 
+readYamlFile(
+  path.join(__dirname, "./../yaml/cluster-autoscaler-autodiscover.yaml"),
+  cluster
+);
+```
+
+Add the AutoScaler to cluster using CDK 
+
+```ts 
+const autoScaler = new AutoScalerHemlStack(app, "AutoScalerHemlStack", {
+  cluster: eks.cluster,
+  nodeGroups: eks.nodeGroups,
+});
+autoScaler.addDependency(eks);
+```
+
+For load test, prepare a few things 
+
+- Update the cdk8s-app/dist/deployemt.yaml to max 1000 pods 
+- Update the Nodegroup with max 20 instances 
+- Artillery load test with 500 threads 
+- Check autoscaling console to the activity 
+
 
 ```bash
 artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
@@ -660,98 +732,4 @@ CdkEksFargateStack.EksClusterLevel2ClusterName5A4A7685 = EksClusterLevel2
 CdkEksFargateStack.EksClusterLevel2ConfigCommand393D8FC7 = aws eks update-kubeconfig --name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
 CdkEksFargateStack.EksClusterLevel2GetTokenCommandA1DFFD22 = aws eks get-token --cluster-name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
 ```
-
-1. 
-  Namespace                   Name                                              CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
-  ---------                   ----                                              ------------  ----------  ---------------  -------------  ---
-  amazon-cloudwatch           cloudwatch-agent-75hqg                            200m (21%)    200m (21%)  200Mi (13%)      200Mi (13%)    27m
-  amazon-cloudwatch           fluent-bit-w8knb                                  500m (53%)    0 (0%)      100Mi (6%)       200Mi (13%)    28m
-  default                     cdk8s-app-deployment-c8f953f2-5b5d597c74-9hnt5    100m (10%)    100m (10%)  0 (0%)           0 (0%)         23m
-  kube-system                 aws-node-mt8sz                                    25m (2%)      0 (0%)      0 (0%)           0 (0%)         28m
-  kube-system                 kube-proxy-4prll                                  100m (10%)    0 (0%)      0 (0%)           0 (0%)         28m
-Allocated resources:
-  (Total limits may be over 100 percent, i.e., overcommitted.)
-  Resource                    Requests     Limits
-  --------                    --------     ------
-  cpu                         925m (98%)   300m (31%)
-  memory                      300Mi (20%)  400Mi (26%)
-  ephemeral-storage           0 (0%)       0 (0%)
-  hugepages-2Mi               0 (0%)       0 (0%)
-  attachable-volumes-aws-ebs  0            0
-
-
-2. 
-  Namespace                   Name                               CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
-  ---------                   ----                               ------------  ----------  ---------------  -------------  ---
-  amazon-cloudwatch           cloudwatch-agent-rh72m             200m (21%)    200m (21%)  200Mi (13%)      200Mi (13%)    166m
-  amazon-cloudwatch           fluent-bit-vrg7l                   500m (53%)    0 (0%)      100Mi (6%)       200Mi (13%)    166m
-  kube-system                 aws-node-fv5m9                     25m (2%)      0 (0%)      0 (0%)           0 (0%)         9h
-  kube-system                 kube-proxy-5sdfz                   100m (10%)    0 (0%)      0 (0%)           0 (0%)         9h
-  kube-system                 metrics-server-66964f547c-d7xgq    100m (10%)    0 (0%)      200Mi (13%)      0 (0%)         9h
-Allocated resources:
-  (Total limits may be over 100 percent, i.e., overcommitted.)
-  Resource                    Requests     Limits
-  --------                    --------     ------
-  cpu                         925m (98%)   200m (21%)
-  memory                      500Mi (33%)  400Mi (26%)
-  ephemeral-storage           0 (0%)       0 (0%)
-  hugepages-2Mi               0 (0%)       0 (0%)
-  attachable-volumes-aws-ebs  0            0
-
-3.  
-
- Namespace                   Name                                                    CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
-  ---------                   ----                                                    ------------  ----------  ---------------  -------------  ---
-  amazon-cloudwatch           cloudwatch-agent-t2w68                                  200m (21%)    200m (21%)  200Mi (13%)      200Mi (13%)    166m
-  default                     cdk8s-app-deployment-c8f953f2-5b5d597c74-djdnw          100m (10%)    100m (10%)  0 (0%)           0 (0%)         23m
-  default                     testwebappchart-deployment-c8b028d9-669fcf7c77-z97tk    0 (0%)        0 (0%)      0 (0%)           0 (0%)         9h
-  default                     testwebappchart-deployment-c8b028d9-669fcf7c77-zx4f5    0 (0%)        0 (0%)      0 (0%)           0 (0%)         9h
-  kube-system                 aws-node-lqtkg                                          25m (2%)      0 (0%)      0 (0%)           0 (0%)         9h
-  kube-system                 coredns-57ff979f67-hk64k                                100m (10%)    0 (0%)      70Mi (4%)        170Mi (11%)    9h
-  kube-system                 coredns-57ff979f67-nlrcr                                100m (10%)    0 (0%)      70Mi (4%)        170Mi (11%)    9h
-  kube-system                 kube-proxy-cnk48                                        100m (10%)    0 (0%)      0 (0%)           0 (0%)         9h
-Allocated resources:
-  (Total limits may be over 100 percent, i.e., overcommitted.)
-  Resource                    Requests     Limits
-  --------                    --------     ------
-  cpu                         625m (66%)   300m (31%)
-  memory                      340Mi (22%)  540Mi (36%)
-  ephemeral-storage           0 (0%)       0 (0%)
-  hugepages-2Mi               0 (0%)       0 (0%)
-  attachable-volumes-aws-ebs  0       
-
-4. 
- Namespace                   Name                      CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
-  ---------                   ----                      ------------  ----------  ---------------  -------------  ---
-  amazon-cloudwatch           cloudwatch-agent-4lrf4    200m (21%)    200m (21%)  200Mi (13%)      200Mi (13%)    27m
-  amazon-cloudwatch           fluent-bit-v66wl          500m (53%)    0 (0%)      100Mi (6%)       200Mi (13%)    28m
-  kube-system                 aws-node-gq2z6            25m (2%)      0 (0%)      0 (0%)           0 (0%)         28m
-  kube-system                 kube-proxy-5gdbh          100m (10%)    0 (0%)      0 (0%)           0 (0%)         28m
-Allocated resources:
-  (Total limits may be over 100 percent, i.e., overcommitted.)
-  Resource                    Requests     Limits
-  --------                    --------     ------
-  cpu                         825m (87%)   200m (21%)
-  memory                      300Mi (20%)  400Mi (26%)
-  ephemeral-storage           0 (0%)       0 (0%)
-  hugepages-2Mi               0 (0%)       0 (0%)
-  attachable-volumes-aws-ebs  0            0
-
-5. 
- Namespace                   Name                                   CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
-  ---------                   ----                                   ------------  ----------  ---------------  -------------  ---
-  amazon-cloudwatch           cloudwatch-agent-6zvnt                 200m (21%)    200m (21%)  200Mi (13%)      200Mi (13%)    166m
-  amazon-cloudwatch           fluent-bit-xnfkf                       500m (53%)    0 (0%)      100Mi (6%)       200Mi (13%)    166m
-  kube-system                 aws-node-hrrts                         25m (2%)      0 (0%)      0 (0%)           0 (0%)         9h
-  kube-system                 cluster-autoscaler-5c5bb8c959-tfcrb    100m (10%)    100m (10%)  600Mi (40%)      600Mi (40%)    125m
-  kube-system                 kube-proxy-p8g89                       100m (10%)    0 (0%)      0 (0%)           0 (0%)         9h
-Allocated resources:
-  (Total limits may be over 100 percent, i.e., overcommitted.)
-  Resource                    Requests     Limits
-  --------                    --------     ------
-  cpu                         925m (98%)   300m (31%)
-  memory                      900Mi (60%)  1000Mi (67%)
-  ephemeral-storage           0 (0%)       0 (0%)
-  hugepages-2Mi               0 (0%)       0 (0%)
-  attachable-volumes-aws-ebs  0            0
-  
+ 
