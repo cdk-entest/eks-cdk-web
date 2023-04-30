@@ -1,8 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import { VpcStack } from "../lib/network-stack";
-import { EksClusterStack } from "../lib/eks-cluster-stack";
+import { EksClusterStack } from "../lib/eks-cluster-level1-stack";
 
-const region = "us-east-1";
 const app = new cdk.App();
 
 const network = new VpcStack(app, "NetworkStack", {
@@ -10,7 +9,7 @@ const network = new VpcStack(app, "NetworkStack", {
   name: "Network",
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: region,
+    region: process.env.CDK_DEFAULT_REGION,
   },
 });
 
@@ -20,7 +19,6 @@ new EksClusterStack(app, "EksClusterStack", {
   vpc: network.vpc,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: region,
+    region: process.env.CDK_DEFAULT_REGION,
   },
 });
-

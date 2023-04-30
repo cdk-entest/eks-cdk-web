@@ -1,4 +1,4 @@
-import { App, Chart, ChartProps } from "cdk8s";
+import {  Chart, ChartProps } from "cdk8s";
 import {
   IntOrString,
   KubeDeployment,
@@ -32,7 +32,7 @@ export class WebAppChart extends Chart {
           matchLabels: label,
         },
         template: {
-          metadata: { labels: label },
+          metadata: { labels: label, name: "cdk8s-hello-deployment" },
           spec: {
             containers: [
               {
@@ -50,11 +50,11 @@ export class WebAppChart extends Chart {
     new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
       spec: {
         minReplicas: 2,
-        maxReplicas: 5,
+        maxReplicas: 10,
         scaleTargetRef: {
           apiVersion: "apps/v1",
           kind: "Deployment",
-          name: "hello-k8s",
+          name: "cdk8s-hello-deployment",
         },
         // default 80% cpu utilization
         metrics: [
@@ -64,7 +64,7 @@ export class WebAppChart extends Chart {
               name: "cpu",
               target: {
                 type: "Utilization",
-                averageUtilization: 85,
+                averageUtilization: 5,
               },
             },
           },

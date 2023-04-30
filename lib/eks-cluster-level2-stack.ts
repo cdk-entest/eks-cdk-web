@@ -4,7 +4,8 @@ import { WebAppChart } from "./webapp-eks-chart";
 import { App } from "cdk8s";
 import * as path from "path";
 import { readYamlFile } from "../utils/read_yaml";
-import { KubectlV24Layer } from "@aws-cdk/lambda-layer-kubectl-v24"
+import { KubectlV24Layer } from "@aws-cdk/lambda-layer-kubectl-v24";
+import { ClusterAutoscaler } from "./auto-scaler";
 
 export interface CdkEksFargateStackProps extends StackProps {
   clusterName: string;
@@ -14,6 +15,7 @@ export interface CdkEksFargateStackProps extends StackProps {
 
 export class CdkEksFargateStack extends Stack {
   public readonly cluster: aws_eks.Cluster;
+  public readonly nodeGroups: Array<aws_eks.Nodegroup> = [];
 
   constructor(scope: Construct, id: string, props: CdkEksFargateStackProps) {
     super(scope, id, props);
@@ -66,7 +68,7 @@ export class CdkEksFargateStack extends Stack {
     });
 
     // add nodegroup
-    cluster.addNodegroupCapacity("MyNodeGroup", {
+    const nodeGroup = cluster.addNodegroupCapacity("MyNodeGroup", {
       instanceTypes: [new aws_ec2.InstanceType("t2.small")],
       subnets: { subnetType: aws_ec2.SubnetType.PUBLIC },
       minSize: 2,
@@ -78,6 +80,7 @@ export class CdkEksFargateStack extends Stack {
 
     // export output
     this.cluster = cluster;
+    this.nodeGroups.push(nodeGroup);
   }
 }
 
@@ -94,12 +97,12 @@ export class DeployChartStack extends Stack {
     const deployment = {
       apiVersion: "apps/v1",
       kind: "Deployment",
-      metadata: { name: "test-deployment" },
+      metadata: { name: "test-update-deployment" },
       spec: {
         replicas: 3,
-        selector: { matchLabels: { app: "test" } },
+        selector: { matchLabels: { app: "test1" } },
         template: {
-          metadata: { labels: { app: "test" } },
+          metadata: { labels: { app: "test1" } },
           spec: {
             containers: [
               {
@@ -113,8 +116,7 @@ export class DeployChartStack extends Stack {
       },
     };
 
-    cluster.addManifest("HelloManifest", deployment);
-
+    // cluster.addManifest("HelloManifest", deployment);
     cluster.addCdk8sChart(
       "TestWebAppChart",
       new WebAppChart(new App(), "TestWebAppChart", { image: "" })
@@ -133,5 +135,23 @@ export class MetricServerStack extends Stack {
     const cluster = props.cluster;
 
     readYamlFile(path.join(__dirname, "./../yaml/metric_server.yaml"), cluster);
+  }
+}
+
+interface AutoScalerProps extends StackProps {
+  cluster: aws_eks.Cluster;
+  nodeGroups: aws_eks.Nodegroup[];
+}
+
+export class AutoScalerHemlStack extends Stack {
+  constructor(scope: Construct, id: string, props: AutoScalerProps) {
+    super(scope, id, props);
+
+    const cluster = props.cluster;
+
+    new ClusterAutoscaler(this, "ClusterAutoScaler", {
+      cluster: cluster,
+      nodeGroups: props.nodeGroups,
+    });
   }
 }

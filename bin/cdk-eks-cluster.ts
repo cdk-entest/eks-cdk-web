@@ -1,5 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import {
+  AutoScalerHemlStack,
   CdkEksFargateStack,
   DeployChartStack,
   MetricServerStack,
@@ -35,6 +36,12 @@ const metricServer = new MetricServerStack(app, "MetricServerStack", {
   cluster: eks.cluster,
 });
 
+const autoScaler = new AutoScalerHemlStack(app, "AutoScalerHemlStack", {
+  cluster: eks.cluster,
+  nodeGroups: eks.nodeGroups,
+});
+
 eks.addDependency(network);
 deploy.addDependency(eks);
 metricServer.addDependency(eks);
+autoScaler.addDependency(eks);
