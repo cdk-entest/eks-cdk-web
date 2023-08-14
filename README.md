@@ -1,565 +1,1107 @@
 ---
-title: introduction to eks on aws with cdk
+title: launch an amazon eks cluster with cdk
 author: haimtran
-descripton: using cdk and cdk8s to deploy eks
-publishedDate:
-date:
+descripton: use cdk to create an amazon eks cluster
+publishedDate: 24/04/2023
+date: 24/04/2023
 ---
 
 ## Introduction
 
-- Hello EKS and CDK8s
-- Deploy by adding manifest in yaml
-- Deploy by CDK8s construct
-- Expose a service via ALB
-- Update kube-config (CDK output noted)
-- Monitor with CloudWatch Container Insight
-- Please create key-pair for ec2 node (sorry)
+[Github](https://github.com/cdk-entest/eks-cdk-launch) shows essential components of an Amazon EKS cluster
 
-## Project Structure
+- Essential Networking
+- Essential Scurity
+- Launch an EKS Cluster
+- Deploy [the First App](https://github.com/cdk-entest/eks-cdk-launch/blob/master/yaml/hello-service.yaml)
 
-init a cdk project by command
+## Architecture
 
-```bash
-cdk init
+![arch](https://user-images.githubusercontent.com/20411077/234173084-3deb3197-cbab-4471-bbff-497c7d6758d9.png)
+
+Essential Networking
+
+- public and private access points
+- the control plane is hosted in an AWS account and VPC
+- the control plane can auto scale with at least 2 API server instances and 3 ectd instances
+
+Essential Security
+
+- Cluster role so control plane can call other AWS services on your behalf
+- Node role for all applications running inside the node
+- Use both node role and service account (EC2 launch type) for security best practice
+- Use both node role and pod execution role (Faragate launch type) for security best practice
+- Three policies are required to attach to the node role
+- AmazonEKSClusterPolicy is required to attach to the cluster role
+
+## Network Stack
+
+create a VPC
+
+```ts
+const vpc = new aws_ec2.Vpc(this, `${props.name}-Vpc`, {
+  vpcName: props.name,
+  maxAzs: 3,
+  enableDnsHostnames: true,
+  enableDnsSupport: true,
+  ipAddresses: aws_ec2.IpAddresses.cidr(props.cidr),
+  // aws nat gateway service not instance
+  natGatewayProvider: aws_ec2.NatProvider.gateway(),
+  // can be less than num az default 1 natgw/zone
+  natGateways: 1,
+  // which public subet have the natgw
+  // natGatewaySubnets: {
+  //   subnetType: aws_ec2.SubnetType.PRIVATE_WITH_EGRESS,
+  // },
+  subnetConfiguration: [
+    {
+      // cdk add igw and route tables
+      name: "PublicSubnet",
+      cidrMask: 24,
+      subnetType: aws_ec2.SubnetType.PUBLIC,
+    },
+    {
+      // cdk add nat and route tables
+      name: "PrivateSubnetNat",
+      cidrMask: 24,
+      subnetType: aws_ec2.SubnetType.PRIVATE_WITH_EGRESS,
+    },
+  ],
+});
 ```
 
-then also install dependencies for cdk8s
+create security group for worker nodes of EKS cluster
 
-```bash
-npm install package.json
+```ts
+const eksSecurityGroup = new aws_ec2.SecurityGroup(this, "EksSecurityGroup", {
+  securityGroupName: "EksSecurityGroup",
+  vpc: vpc,
+});
+
+eksSecurityGroup.addIngressRule(
+  eksSecurityGroup,
+  aws_ec2.Port.allIcmp(),
+  "self reference security group"
+);
 ```
 
-package.json
+add a sts vpc endpoint
+
+```ts
+vpc.addInterfaceEndpoint("STSVpcEndpoint", {
+  service: aws_ec2.InterfaceVpcEndpointAwsService.STS,
+  open: true,
+  subnets: {
+    subnetType: aws_ec2.SubnetType.PRIVATE_WITH_EGRESS,
+  },
+  securityGroups: [eksSecurityGroup],
+});
+```
+
+## Cluster Stack
+
+create an EKS cluster using CDK level 1 (equivalent to CloudFormation template)
+
+select subnets where to place the worker nodes
+
+```ts
+const subnets: string[] = props.vpc.publicSubnets.map((subnet) =>
+  subnet.subnetId.toString()
+);
+```
+
+create role for the EKS cluster
+
+```ts
+const role = new aws_iam.Role(this, `RoleForEksCluster-${props.clusterName}`, {
+  roleName: `RoleForEksCluster-${props.clusterName}`,
+  assumedBy: new aws_iam.ServicePrincipal("eks.amazonaws.com"),
+});
+
+role.addManagedPolicy(
+  aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEKSClusterPolicy")
+);
+```
+
+create an EKS cluster
+
+```ts
+const cluster = new aws_eks.CfnCluster(
+  this,
+  `EksCluster-${props.clusterName}`,
+  {
+    name: props.clusterName,
+    version: "1.25",
+    resourcesVpcConfig: {
+      // at least two subnets in different zones
+      // at least 6 ip address, recommended 16
+      subnetIds: subnets,
+      //
+      endpointPrivateAccess: false,
+      //
+      endpointPublicAccess: true,
+      // cidr block allowed to access cluster
+      // default 0/0
+      publicAccessCidrs: ["0.0.0.0/0"],
+      // eks will create a security group to allow
+      // communication between control and data plane
+      // nodegroup double check
+      securityGroupIds: [props.eksSecurityGroup.securityGroupId],
+    },
+    kubernetesNetworkConfig: {
+      // don not overlap with VPC
+      // serviceIpv4Cidr: "",
+    },
+    // role for eks call aws service on behalf of you
+    roleArn: role.roleArn,
+    logging: {
+      // by deault control plan logs is not exported to CW
+      clusterLogging: {
+        enabledTypes: [
+          {
+            // api | audit | authenticator | controllerManager
+            type: "api",
+          },
+          {
+            type: "controllerManager",
+          },
+          {
+            type: "scheduler",
+          },
+          {
+            type: "authenticator",
+          },
+          {
+            type: "audit",
+          },
+        ],
+      },
+    },
+  }
+);
+```
+
+create role for worker node
+
+```ts
+const nodeRole = new aws_iam.Role(this, `RoleForEksNode-${props.clusterName}`, {
+  roleName: `RoleForEksNode-${props.clusterName}`,
+  assumedBy: new aws_iam.ServicePrincipal("ec2.amazonaws.com"),
+});
+
+nodeRole.addManagedPolicy(
+  aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEKSWorkerNodePolicy")
+);
+
+nodeRole.addManagedPolicy(
+  aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+    "AmazonEC2ContainerRegistryReadOnly"
+  )
+);
+
+nodeRole.addManagedPolicy(
+  aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEKS_CNI_Policy")
+);
+```
+
+add an aws managed group the the cluster
+
+```ts
+const nodegroup = new aws_eks.CfnNodegroup(this, "AWSManagedNodeGroupDemo", {
+  nodegroupName: "AWSManagedNodeGroupDemo",
+  // kubernetes version default from cluster
+  // version: "",
+  nodeRole: nodeRole.roleArn,
+  clusterName: cluster.name!,
+  subnets: subnets,
+  // eks ami release version default latest
+  // releaseVersion: ,
+  capacityType: "ON_DEMAND",
+  // default t3.medium
+  instanceTypes: ["t2.medium"],
+  diskSize: 50,
+  // ssh remote access
+  remoteAccess: {
+    ec2SshKey: "eks-node-ssh",
+  },
+  // scaling configuration
+  scalingConfig: {
+    desiredSize: 2,
+    maxSize: 5,
+    minSize: 1,
+  },
+  // update configuration
+  updateConfig: {
+    maxUnavailable: 1,
+    // maxUnavailablePercentage: 30,
+  },
+  // label configuration
+  labels: {
+    environment: "dev",
+  },
+});
+```
+
+## Fargate Profile
+
+create pod role
+
+```ts
+const podRole = new aws_iam.Role(
+  this,
+  `RoleForFargatePod-${props.clusterName}`,
+  {
+    roleName: `RoleForFargatePod-${props.clusterName}`,
+    assumedBy: new aws_iam.ServicePrincipal("eks-fargate-pods.amazonaws.com"),
+  }
+);
+
+podRole.addManagedPolicy(
+  aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+    "AmazonEKSFargatePodExecutionRolePolicy"
+  )
+);
+```
+
+create a Fargate profile
+
+```ts
+const appFargateProfile = new aws_eks.CfnFargateProfile(
+  this,
+  "FirstFargateProfileDemo1",
+  {
+    clusterName: cluster.name!,
+    podExecutionRoleArn: podRole.roleArn,
+    selectors: [
+      {
+        namespace: "demo",
+        labels: [
+          {
+            key: "environment",
+            value: "dev",
+          },
+        ],
+      },
+    ],
+    fargateProfileName: "demo",
+    // default all private subnet in the vpc
+    subnets: subnets,
+    tags: [
+      {
+        key: "name",
+        value: "test",
+      },
+    ],
+  }
+);
+```
+
+## Node Selector
+
+When an EKS cluster consists of EC2 nodegroup and Fargate profile, in some cases, we want to select specific pods to run some pods. To do that, we can use node labels, node selector, or affinity. For example, as Fargate profile does not support deamonset, we can select only EC2 nodes to launch deamon set as the following
+
+```yaml
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: eks.amazonaws.com/compute-type
+              operator: NotIn
+              values:
+                - fargate
+```
+
+show labels of nodes
+
+```bash
+kubect get nodes --show-labels
+```
+
+## Cluster Authentication
+
+- Kubernetes Role
+- Kubernetes RoleBinding
+- AWS IAM and RBAC
+
+Kubernetes Role to setup permissions or what actions are allowed
+
+```yaml
+apiVersion: rbac.authorization.Kubernetes.io/v1
+kind: Role
+metadata:
+  creationTimestamp: null
+  namespace: default
+  name: dev-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "patch", "update", "watch"]
+```
+
+Kubernetes RoleBinding to bind an identity (group or user) with the Role
+
+```yaml
+apiVersion: rbac.authorization.Kubernetes.io/v1
+kind: RoleBinding
+metadata:
+  creationTimestamp: null
+  name: dev-role-binding
+  namespace: default
+subjects:
+  - kind: User
+    name: developer
+    apiGroup: rbac.authorization.Kubernetes.io
+roleRef:
+  kind: Role
+  name: dev-role
+  apiGroup: rbac.authorization.Kubernetes.io
+```
+
+Update the aws-auth configmap
+
+```bash
+kubectl edit -n kube-system configmap/aws-auth
+```
+
+An example of the aws-auth, mapping role to user and groups
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-auth
+  namespace: kube-system
+data:
+  mapRoles: |
+    - rolearn: xxx 
+      username: developer 
+    - rolearn: <ARN of instance role (not instance profile)>
+      username: system:node:{{EC2PrivateDNSName}}
+      groups:
+        - system:bootstrappers
+        - system:nodes
+```
+
+Using eksctl as recommended by aws docs
+
+```bash
+eksctl delete iamidentitymapping \
+--region=$Region \
+--cluster=$ClusterName \
+--arn=$Role \
+```
+
+Update the kube config
+
+```bash
+aws eks update-kubeconfig --name $ClusterName --role-arn $ROLE
+```
+
+## Service Account
+
+Quoted from [docs](https://docs.aws.amazon.com/eks/latest/userguide/service-accounts.html): _A Kubernetes service account provides an identity for processes that run in a Pod_. There are some use cases to understand
+
+- A process in a pod want to access data in S3, DynamoDB
+- ALB Controller create a ALB controller in AWS
+- Amazon EBS CSI Drive add-on creates presistent storate (EBS volumnes) in AWS
+- AutoScaler trigger Auto Scaling Group in AWS
+
+Essential components when setting up a service account for Kubernetes. In short, a service account in Kubernetes need to assume an IAM role to access to AWS services.
+
+- OIDC Identity: the EKS cluster should have an OpenID Connect provider
+- IAM Identity Provider
+- Trust Policy: the process should be able to assume a role in AWS IAM
+- ServiceAccount: create a service account in Kubernetes
+- ServiceAccount: annotate the service account with the IAM role arn
+
+Let consider two example
+
+- Example 1: setup permissions for the EBS CSI Driver add-on
+- Example 2: setup permissions for ADOT-Collector
+
+In example 1, the driver need to create EBS volumnes in AWS services.
+
+- Step 1. Create a service account in Kubernetes
+- Step 2. Create Identity Provider in AWS IAM
+- Step 3. Create an IAM role in AWS IAM
+
+Step 1. Create a service account in Kubernetes. In this case, the service account **ebs-csi-controller-sa** already created when installing the add-on.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::$ACCOUNT:role/AmazonEKS_EBS_CSI_Driver
+  creationTimestamp: "2023-05-13T06:11:46Z"
+  labels:
+    app.kubernetes.io/component: csi-driver
+    app.kubernetes.io/managed-by: EKS
+    app.kubernetes.io/name: aws-ebs-csi-driver
+    app.kubernetes.io/version: 1.18.0
+  name: ebs-csi-controller-sa
+  namespace: kube-system
+  resourceVersion: "66136"
+```
+
+Step 2. Create Identity Provider in AWS IAM
+
+```bash
+eksctl utils associate-iam-oidc-provider \
+--cluster=$CLUSTER_NAME \
+--approve
+```
+
+Step 3. Create an IAM role to be assumed by the service account
+
+For example, create a role for the EBS CSI add-on. First, create a trust policy to allow the ID (OpenID Connect) assume the role
 
 ```json
 {
-  "name": "cdk-eks-fargate",
-  "version": "0.1.0",
-  "bin": {
-    "cdk-eks-fargate": "bin/cdk-eks-fargate.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w",
-    "test": "jest",
-    "cdk": "cdk"
-  },
-  "devDependencies": {
-    "@types/jest": "^27.5.2",
-    "@types/js-yaml": "^4.0.5",
-    "@types/node": "10.17.27",
-    "@types/prettier": "2.6.0",
-    "aws-cdk": "2.67.0",
-    "jest": "^27.5.1",
-    "ts-jest": "^27.1.4",
-    "ts-node": "^10.9.1",
-    "typescript": "~3.9.7"
-  },
-  "dependencies": {
-    "aws-cdk-lib": "2.67.0",
-    "cdk8s": "^2.5.86",
-    "cdk8s-plus-24": "^2.3.7",
-    "constructs": "^10.0.0",
-    "js-yaml": "^4.1.0",
-    "package.json": "^2.0.1",
-    "source-map-support": "^0.5.21"
-  }
-}
-```
-
-then check the project structure as below
-
-```ts
-|--bin
-   |--cdk-eks-fargate.ts
-|--imports
-   |--k8s.ts
-|--lib
-   |--cdk-eks-fargate-stack.ts
-   |--network-stack.ts
-   |--webapp-eks-chart.ts
-|--webapp
-   |--Dockerfile
-   |--app.y
-   |--requirements.txt
-   |-static
-   |--templates
-|--package.json
-```
-
-## Create a EKS Cluster
-
-create a eks cluster
-
-```ts
-const cluster = new aws_eks.Cluster(this, "HelloCluster", {
-  version: aws_eks.KubernetesVersion.V1_21,
-  clusterName: "HelloCluster",
-  outputClusterName: true,
-  endpointAccess: aws_eks.EndpointAccess.PUBLIC,
-  vpc: vpc,
-  vpcSubnets: [{ subnetType: aws_ec2.SubnetType.PUBLIC }],
-  defaultCapacity: 0,
-});
-```
-
-add node group (there are different type of node group). By default, a AWS managed group with 2 m5.large instances will be created, and those nodes placed in private subnet with NAT by default. Set defaultCapacity to 0 will not apply this default setting, then add a node group as below
-
-```ts
-cluster.addNodegroupCapacity("MyNodeGroup", {
-  instanceTypes: [new aws_ec2.InstanceType("m5.large")],
-  subnets: { subnetType: aws_ec2.SubnetType.PUBLIC },
-});
-```
-
-we need to understand there are three roles
-
-- creation role which is assumed by CDK in this case
-- cluster role which is assumed by the cluster on behalf of us to access aws resources
-- master role which is added to kubernetes RBAC
-
-to kubectl into the cluster, we need to configure out client with the creation role. Please look up this role in CloudFormation
-
-```bash
-aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445566:role/yyyyy
-Added new context arn:aws:eks:rrrrr:112233445566:cluster/cluster-xxxxx to /home/boom/.kube/config
-```
-
-## Deploy by Adding Manifest (YAML)
-
-option 1 is to add manifest to a cluster to deploy an container application
-
-```ts
-cluster.addManifest("mypod", {
-  apiVersion: "v1",
-  kind: "Pod",
-  metadata: { name: "mypod" },
-  spec: {
-    containers: [
-      {
-        name: "hello",
-        image: "paulbouwer/hello-kubernetes:1.5",
-        ports: [{ containerPort: 8080 }],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::$ACCOUNT:oidc-provider/oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID"
       },
-    ],
-  },
-});
-```
-
-assume that there are already a YAML file then it can be read and added to the cluster by a function as below
-
-```tsx
-export function readYamlFromDir(dir: string, cluster: aws_eks.Cluster) {
-  let previousResource: KubernetesManifest;
-  fs.readdirSync(dir, "utf8").forEach((file) => {
-    if (file != undefined && file.split(".").pop() == "yaml") {
-      let data = fs.readFileSync(dir + file, "utf8");
-      if (data != undefined) {
-        let i = 0;
-        yaml.loadAll(data).forEach((item) => {
-          const resource = cluster.addManifest(
-            file.substr(0, file.length - 5) + i,
-            item as any
-          );
-          // @ts-ignore
-          if (previousResource != undefined) {
-            resource.node.addDependency(previousResource);
-          }
-          previousResource = resource;
-          i++;
-        });
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "oidc.ek$REGION.amazonaws.com/id/$OIDC_ID:aud": "sts.amazonaws.com",
+          "oidc.ek$REGION.amazonaws.com/id/$OIDC_ID:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+        }
       }
     }
+  ]
+}
+```
+
+Second, add policies to the role, for example AWS managed **AmazonEBSCSIDriverPolicy** policy to the role.
+
+In example 2, the collector running in Faragte need permissions to send logs to AWS CloudWatch.
+
+- Step 1. Create service account in Kubernetes
+- Step 2. Create Identity Provider in AWS IAM
+- Step 3. Create a Role in AWS IAM
+
+By using eksctl, three step can be done in two commands below. Under the hoold, eksctl will create a Lambda function which call kubernetes API server.
+
+```bash
+#!/bin/bash
+CLUSTER_NAME=EksClusterLevel1
+REGION=ap-southeast-1
+SERVICE_ACCOUNT_NAMESPACE=fargate-container-insights
+SERVICE_ACCOUNT_NAME=adot-collector
+SERVICE_ACCOUNT_IAM_ROLE=EKS-Fargate-ADOT-ServiceAccount-Role
+SERVICE_ACCOUNT_IAM_POLICY=arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+eksctl utils associate-iam-oidc-provider \
+--cluster=$CLUSTER_NAME \
+--approve
+
+eksctl create iamserviceaccount \
+--cluster=$CLUSTER_NAME \
+--region=$REGION \
+--name=$SERVICE_ACCOUNT_NAME \
+--namespace=$SERVICE_ACCOUNT_NAMESPACE \
+--role-name=$SERVICE_ACCOUNT_IAM_ROLE \
+--attach-policy-arn=$SERVICE_ACCOUNT_IAM_POLICY \
+--approve
+```
+
+## AutoScaler
+
+How scale up work?
+
+- It checkes any unscheduled pods every 10 seconds (scan-interval)
+- Change size (desired size) of the nodegroup of auto-scaling group
+- Launch new nodes using templates
+
+How scale down group? CA check for unneeded ndoes
+
+- Every 10 seconds, if no scale up, CA checks which nodes are unneeded by some conditions (CPU, Mem)
+- All pods running on the node can be moved to other nodes
+- If a node is unneeded for more than 10 minutes, it will be terminated
+
+Install the AutoScaler, for simple demo
+
+- Update role for ec2 node, so it can scale the autoscaling group
+- More secure way is to use service account
+- Install AutoScaler yaml by kubectl
+- Install AutoScaler by reading yaml and add to the cluster by CDK
+
+There are some important parameters
+
+- [AutoScaler reaction time](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#how-can-i-modify-cluster-autoscaler-reaction-time)
+- [scan-interval](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#how-can-i-modify-cluster-autoscaler-reaction-time) 10 seconds by default which check for unscheduled pods via API servers
+- [--scale-down-unneeded-time](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#how-can-i-modify-cluster-autoscaler-reaction-time)
+- [--max-node-provision-time](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#how-can-i-modify-cluster-autoscaler-reaction-time) how log requested nodes to appear, within 15 minutes
+
+Update role for ec2 node to work with auto-scaling group
+
+```ts
+nodeRole.addToPolicy(
+  new aws_iam.PolicyStatement({
+    effect: aws_iam.Effect.ALLOW,
+    actions: [
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeAutoScalingInstances",
+      "autoscaling:DescribeLaunchConfigurations",
+      "autoscaling:DescribeTags",
+      "autoscaling:SetDesiredCapacity",
+      "autoscaling:TerminateInstanceInAutoScalingGroup",
+      "ec2:DescribeLaunchTemplateVersions",
+    ],
+    resources: ["*"],
+  })
+);
+```
+
+Optionally, update autoscaling tags
+
+```ts
+props.nodeGroups.forEach((element) => {
+  new Tag(
+    "Kubernetes.io/cluster-autoscaler/" + props.cluster.clusterName,
+    "owned",
+    {
+      applyToLaunchedInstances: true,
+    }
+  );
+
+  new Tag("Kubernetes.io/cluster-autoscaler/enabled", "true", {
+    applyToLaunchedInstances: true,
   });
-}
+  policy.attachToRole(element.role);
+});
 ```
 
-## Deploy by Construct
+Install AutoScaler by kubectl. Download the yaml and replace YOUR CLUSTER NAME with the cluster name Optionall, use affinity to launch this AutoScaler to the EC2 nodegroup only, no Faragte profile.
 
-create a cdk8s chart as below
+```bash
+curl -O https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml
+```
+
+Install AutoScaler using kubectl
+
+```bash
+kubect apply -f cluster-autoscaler-autodiscover.yaml
+```
+
+In case of CDK Construct level 2, it is possible to deploy the AutoScaler yaml by adding manifest to the cluster
 
 ```ts
-export class MyChart extends Chart {
-  constructor(scope: Construct, id: string, props: ChartProps = {}) {
-    super(scope, id, props);
-
-    const label = { app: "hello-k8s" };
-
-    new KubeService(this, "service", {
-      spec: {
-        type: "LoadBalancer",
-        ports: [{ port: 80, targetPort: IntOrString.fromNumber(8080) }],
-        selector: label,
-      },
-    });
-
-    new KubeDeployment(this, "deployment", {
-      spec: {
-        replicas: 2,
-        selector: {
-          matchLabels: label,
-        },
-        template: {
-          metadata: { labels: label },
-          spec: {
-            containers: [
-              {
-                name: "hello-kubernetes",
-                image: "paulbouwer/hello-kubernetes:1.7",
-                ports: [{ containerPort: 8080 }],
-              },
-            ],
-          },
-        },
-      },
-    });
-  }
-}
+readYamlFile(
+  path.join(__dirname, "./../yaml/cluster-autoscaler-autodiscover.yaml"),
+  cluster
+);
 ```
 
-then integrate the chart with cdk stack (cluster) as below
+Add the AutoScaler to cluster using CDK
 
 ```ts
-cluster.addCdk8sChart("my-chart", new MyChart(new cdk8s.App(), "MyChart"));
+const autoScaler = new AutoScalerHemlStack(app, "AutoScalerHemlStack", {
+  cluster: eks.cluster,
+  nodeGroups: eks.nodeGroups,
+});
+autoScaler.addDependency(eks);
 ```
 
-## Expose a Service via ALB
+Also update the scaling configuration of the nodegroup
 
-to expose a service so that it is publicly accessible via the internet, one solution is via a LoadBalancer service which we be deployed as a classic load balancer in AWS cloud provider
+```ts
+  scalingConfig: {
+          desiredSize: 2,
+          maxSize: 22,
+          minSize: 1,
+        },
+```
+
+For load test, prepare a few things
+
+- Update the cdKubernetes-app/dist/deployemt.yaml to max 1000 pods
+- Update the Nodegroup with max 20 instances
+- Artillery load test with 500 threads
+- Check autoscaling console to the activity
+
+```bash
+artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
+kubect get hpa --watch
+kubect top pod -n default
+kubect top node
+```
+
+Monitor logs of the AutoScaler
+
+```bash
+kubectl -n kube-system logs -f deployment.apps/cluster-autoscaler
+```
+
+## Observability for EKS EC2
+
+There are serveral methods
+
+- Applications send logs
+- Sidecar container pattern
+- Node agent (the most common method)
+
+Depending on EC2 or Fargate, there are different tools
+
+- Container Insights: CloudWatch Agent and Fluent Bit installed per node
+- ADOT (AWS Distro for OpenTelemetry) works for both EC2 and Fargate
+
+As the cluster using both EC2 nodegroup and Faragate profile
+
+- Setup CloudWatch Agent and Fluent-bit for EC2 nodegroup
+- Setup ADOT for Faragate profile
+- Also need to setup the metric server
+
+How CloudWatch Agent and Fluent Bit work?
+
+- CloudWatch Agent installed per EC2 Node and collect metrics, then send to performance log group in CW
+- Fluent Bit send logs to log groups: host, application, dataplane
+
+Install metric sersver
+
+```yaml
+check the yaml/metric-server.yaml
+```
+
+Install CloudWatch Agent and Fluent-bit in EC2 Nodegroup
+
+- replace region with your target region
+- replace cluster-name with your cluster-name
+
+```yaml
+check the yaml/cwagent-fluent-bit.yaml
+```
+
+## Observability for EKS Fargate
+
+How ADOT works in Fargate?
+
+Quoted
+
+```
+The kubelet on a worker node in a Kubernetes cluster exposes resource metrics such as CPU, memory, disk, and network usage at the /metrics/cadvisor endpoint. However, in EKS Fargate networking architecture, a pod is not allowed to directly reach the kubelet on that worker node. Hence, the ADOT Collector calls the Kubernetes API Server to proxy the connection to the kubelet on a worker node, and collect kubelet’s cAdvisor metrics for workloads on that node.
+
+```
+
+- An ADOT Collector is installed in a Fargate box
+- The ADOT call the API server for metrics
+- The API server proxy to Kuberlete in each Fargate Box
+
+Install ADOT in Fargate profile:
+
+- assume the CF exection role
+- install iamserviceaccount by assuming CF exection role
+- install ADOT agent by using the default role
+
+To assume CF exection role
+
+```bash
+aws sts assume-role --role-arn 'arn:aws:xxx' --role-session-name eks
+```
+
+Then update the ~/.aws/credentials with recevied credentials, then run the below bash script
+
+```bash
+#!/bin/bash
+CLUSTER_NAME=EksClusterLevel1
+REGION=ap-southeast-1
+SERVICE_ACCOUNT_NAMESPACE=fargate-container-insights
+SERVICE_ACCOUNT_NAME=adot-collector
+SERVICE_ACCOUNT_IAM_ROLE=EKS-Fargate-ADOT-ServiceAccount-Role
+SERVICE_ACCOUNT_IAM_POLICY=arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+eksctl utils associate-iam-oidc-provider \
+--cluster=$CLUSTER_NAME \
+--approve
+
+eksctl create iamserviceaccount \
+--cluster=$CLUSTER_NAME \
+--region=$REGION \
+--name=$SERVICE_ACCOUNT_NAME \
+--namespace=$SERVICE_ACCOUNT_NAMESPACE \
+--role-name=$SERVICE_ACCOUNT_IAM_ROLE \
+--attach-policy-arn=$SERVICE_ACCOUNT_IAM_POLICY \
+--approve
+```
+
+After created the iamserviceaccount, use the default role to run below command
+
+```bash
+ClusterName=EksClusterLevel1
+REGION=ap-southeast-1
+curl https://raw.githubusercontent.com/aws-observability/aws-otel-collector/main/deployment-template/eks/otel-fargate-container-insights.yaml | sed 's/YOUR-EKS-CLUSTER-NAME/'${ClusterName}'/;s/us-east-1/'${Region}'/' | kubectl apply -f -
+```
+
+## Prometheus
+
+This section walk through steps to step up Prometheus
+
+- Prometheus components and methods to setup
+- Setup the EBS CSI Driver add-on with service account [here](https://cdk.entest.io/eks/service-account)
+- Setup Prometheus and Grafana using helm chart
+
+### Section 1. Components of Prometheus
+
+Check [docs](https://prometheus.io/docs/introduction/overview/)
+
+- Prometheus server
+- Alert manager
+- Pushgateway
+- Node exporter
+- PromQL, PrometheusUI, Grafana, API Clients
+
+### Section 2. Setup Prometheus
+
+There are several ways to setup monitoring with Prometheus, please read [docs](https://prometheus-operator.dev/docs/user-guides/getting-started/).
+
+- [Prometheus-community helm chart ](https://github.com/prometheus-community/helm-charts/tree/main)
+- [Kube-prometheus ](https://github.com/prometheus-operator/kube-prometheus)
+- [Prometheus operator](https://github.com/prometheus-operator)
+
+The easiest way is to use Prometheus community helm chart. First, add the repository
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+```
+
+List charts from the repository
+
+```bash
+helm search repo prometheus-community
+```
+
+Then install the Prometheus community helm chart with custom configuration
+
+```bash
+helm install my-prometheus prometheus-community/prometheus -f ./test/prometheus_values.yaml
+```
+
+There are two methods for metric collectioin configuration
+
+- Via ServiceMonitor and PodMonitor in Prometheus Operator [HERE](https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/user-guides/getting-started.md)
+- Via scrape_configs in prometheus.yaml [HERE](https://www.cncf.io/blog/2021/10/25/prometheus-definitive-guide-part-iii-prometheus-operator/)
+
+Forward port to see Prometheus server UI
+
+```bash
+kubectl port-forward deploy/prometheus-server 8080:9090 -n prometheus
+```
+
+First query with Prometheus
+
+```sql
+sum by (namespace) (kube_pod_info)
+```
+
+### Section 3. Prometheus and Granfana
+
+To install both Prometheus and Grafana, choose another release
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install prometheus prometheus-community/kube-prometheus-stack -f ./test/prometheus_values.yaml
+```
+
+Then port-forward to login the Grafana UI
+
+```bash
+kubectl port-forward deploy/prometheus-grafana 8081:3000 -n prometheus
+```
+
+Find the password to login Grafana
+
+```bash
+kubectl get secret --namespace prometheus prometheus-grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo
+```
+
+Login Grafana UI, and go to the menu button, find
+
+- Dashboard and select Kubernetes/Compute Resources/ Pod and see
+- Explore, select code, and query with PromQL
+
+## Docker Image
+
+Let build a docker image to deploy the next.js app. Here is the dockerfile
+
+```
+# layer 1
+FROM node:lts as dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install --frozen-lockfile
+
+# layer 2
+FROM node:lts as builder
+WORKDIR /app
+COPY . .
+COPY --from=dependencies /app/node_modules ./node_modules
+RUN npm run build
+
+# layer 3
+FROM node:lts as runner
+WORKDIR /app
+ENV NODE_ENV production
+
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+# run
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+The .dockerignore file
+
+```
+node_modules
+**/node_modules/
+.next
+.git
+```
+
+Let write a python script to automate build and push to aws ecr
+
+```py
+import os
+import subprocess
+
+# parameters
+REGION = "ap-southeast-1"
+ACCOUNT = "227135398356"
+
+# delete all docker images
+os.system("sudo docker system prune -a")
+
+# build next-app image
+os.system("sudo docker build -t next-app . ")
+
+#  aws ecr login
+os.system(f"aws ecr get-login-password --region {REGION} | sudo docker login --username AWS --password-stdin {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com")
+
+# get image id
+IMAGE_ID=os.popen("sudo docker images -q next-app:latest").read()
+
+# tag next-app image
+os.system(f"sudo docker tag {IMAGE_ID.strip()} {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/next-app:latest")
+
+# create ecr repository
+os.system(f"aws ecr create-repository --registry-id {ACCOUNT} --repository-name next-app")
+
+# push image to ecr
+os.system(f"sudo docker push {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/next-app:latest")
+
+# run locally to test
+os.system(f"sudo docker run -d -p 3000:3000 next-app:latest")
+```
+
+Run the container image locally to test it
+
+```bash
+sudo docker run -d -p 3000:3000 next-app:latest"
+```
+
+## Deploy in EKS
+
+Let deploy the next.js app in EKS, here is the yaml file. Please replace the ecr image path
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: cdk8s-service-c844e1e1
+  name: next-app-service
 spec:
   ports:
     - port: 80
-      targetPort: 8080
+      targetPort: 3000
   selector:
-    app: hello-k8s
+    app: next-app
   type: LoadBalancer
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cdk8s-deployment-c8087a1b
+  name: next-app-deployment
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: hello-k8s
+      app: next-app
   template:
     metadata:
       labels:
-        app: hello-k8s
+        app: next-app
     spec:
       containers:
-        - image: paulbouwer/hello-kubernetes:1.7
-          name: hello-kubernetes
+        - image: 227135398356.dkr.ecr.ap-southeast-1.amazonaws.com/next-app:latest
+          name: next-app
           ports:
-            - containerPort: 8080
-```
-
-## Horizontal Scaling
-
-following the kubernetes docs [HERE] to see how to create a Horizontal Pod AutoScaler
-
-```yaml
+            - containerPort: 3000
+          resources:
+            limits:
+              cpu: 500m
+            requests:
+              cpu: 500m
+---
 apiVersion: autoscaling/v2beta2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: cdk8s-webhorizontalautoscaler-c8c254b6
+  name: next-app-hpa
 spec:
-  maxReplicas: 5
+  maxReplicas: 1000
   metrics:
     - resource:
         name: cpu
         target:
-          averageUtilization: 85
+          averageUtilization: 5
           type: Utilization
       type: Resource
   minReplicas: 2
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: hello-k8s
+    name: next-app-deployment
 ```
 
-create the HPA using cdk8s as
+## HTTPS Service
 
-```ts
-new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
-  spec: {
-    minReplicas: 2,
-    maxReplicas: 5,
-    scaleTargetRef: {
-      apiVersion: "apps/v1",
-      kind: "Deployment",
-      name: "hello-k8s",
+It is possible to use a domain registered in another account and create Route53 record in this account.
+
+- Account A: register a domain from Route53
+- Account A: create a record in Route53 which route to LB in account B
+- Account B: create an ACM certificate and confirming by email
+- Account B: create a service.yaml with annotations specifing the certificate
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-app-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:ap-southeast-1:$ACCOUNT:certificate/$ID"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+      name: http
+    - port: 443
+      targetPort: 8080
+      name: https
+  selector:
+    app: flask-app
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+        - image: $ACCOUNT.dkr.ecr.ap-southeast-1.amazonaws.com/flask-app:latest
+          name: flask-app
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: 100m
+            requests:
+              cpu: 100m
+---
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: flask-app-hpa
+spec:
+  maxReplicas: 1000
+  metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 5
+          type: Utilization
+      type: Resource
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: flask-app-deployment
+```
+
+TODO: image here
+
+Inside cluster we can shell into a busy box and wget to clusterip of the service
+
+```bash
+kubectl run busybox --image=busybox --rm -it --command -- bin/sh
+```
+
+then wget the cluster ip
+
+```bash
+wget -O- http://10.100.24.166:80
+```
+
+describe a service
+
+```bash
+describe service book-app-service
+```
+
+## Troubleshooting
+
+- cloudformation execution role
+- kubectl config update
+
+After cdk bootstrap, it is recommended to update the trust policy of the cloudformation execution role it can be assumed by the role attached to dev machine.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudformation.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
     },
-    // default 80% cpu utilization
-    metrics: [
-      {
-        type: "Resource",
-        resource: {
-          name: "cpu",
-          target: {
-            type: "Utilization",
-            averageUtilization: 85,
-          },
-        },
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:sts::$ACCOUNT_ID:assumed-role/TeamRole/MasterKey"
       },
-    ],
-  },
-});
-```
-
-## Develop with CDK8S
-
-install cdk8s
-
-```bash
-npm install -g cdk8s-cli
-```
-
-create a new cdk8s-app directory
-
-```bash
-mkdir cdk8s-app
-```
-
-and then init a new cdk8s project
-
-```bash
-cdk8s init typescript-app
-```
-
-project structure
-
-```
-|--bin
-   |--cdk-eks-fargate.ts
-|--lib
-   |--eks-cluster-stack.ts
-   |--network-stack.ts
-|--cdk8s-app
-   |--dist
-   |--imports
-   |--main.ts
-```
-
-synthesize from ts to yaml
-
-```bash
-cdk8s --app 'npx ts-node main.ts' synth
-```
-
-develop an service and auto-scaling
-
-```ts
-import { App, Chart, ChartProps } from "cdk8s";
-import {
-  IntOrString,
-  KubeDeployment,
-  KubeService,
-  KubeHorizontalPodAutoscalerV2Beta2,
-} from "./imports/k8s";
-import { Construct } from "constructs";
-
-interface WebAppChartProps extends ChartProps {
-  image: string;
+      "Action": "sts:AssumeRole"
+    }
+  ]
 }
-
-export class WebAppChart extends Chart {
-  constructor(scope: Construct, id: string, props: WebAppChartProps) {
-    super(scope, id, props);
-
-    const label = { app: "hello-cdk8s" };
-
-    new KubeService(this, "service", {
-      spec: {
-        type: "LoadBalancer",
-        ports: [{ port: 80, targetPort: IntOrString.fromNumber(8080) }],
-        selector: label,
-      },
-    });
-
-    new KubeDeployment(this, "deployment", {
-      spec: {
-        replicas: 2,
-        selector: {
-          matchLabels: label,
-        },
-        template: {
-          metadata: { labels: label },
-          spec: {
-            containers: [
-              {
-                name: "hello-kubernetes",
-                // image: "paulbouwer/hello-kubernetes:1.7",
-                image: props.image,
-                ports: [{ containerPort: 8080 }],
-              },
-            ],
-          },
-        },
-      },
-    });
-
-    new KubeHorizontalPodAutoscalerV2Beta2(this, "WebHorizontalAutoScaler", {
-      spec: {
-        minReplicas: 2,
-        maxReplicas: 5,
-        scaleTargetRef: {
-          apiVersion: "apps/v1",
-          kind: "Deployment",
-          name: "hello-cdk8s",
-        },
-        // default 80% cpu utilization
-        metrics: [
-          {
-            type: "Resource",
-            resource: {
-              name: "cpu",
-              target: {
-                type: "Utilization",
-                averageUtilization: 85,
-              },
-            },
-          },
-        ],
-      },
-    });
-  }
-}
-
-const app = new App();
-new WebAppChart(app, "cdk8s-app", {
-  image: "$ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/flask-web:latest",
-});
-app.synth();
 ```
 
-## Build Docker Image
-
-install docker engine
-
-```bash
-https://docs.docker.com/engine/install/ubuntu/
-```
-
-build my image
-
-```bash
-docker build -t flask-app .
-```
-
-run docker image
-
-```bash
-docker run -d -p 3000:3000 flask-app:latest
-```
-
-list docker running
-
-```bash
-docker ps
-```
-
-stop all running containers
-
-```bash
-docker kill $(docker ps -q)
-```
-
-delete all docker images
-
-```bash
-docker system prune -a
-
-```
-
-docker ecr log in
-
-```bash
-aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 642644951129.dkr.ecr.us-east-1.amazonaws.com
-```
-
-tag image
-
-```bash
-sudo docker tag 121345bea3b3 642644951129.dkr.ecr.us-east-1.amazonaws.com/flask-app:latest
-```
-
-push image to ecr
-
-```bash
-sudo docker push 642644951129.dkr.ecr.us-east-1.amazonaws.com/flask-app:latest
-```
-
-please go to aws ecr console and create flask-app repository
-
-## Observability
-
-Install metrics server [here](https://docs.aws.amazon.com/eks/latest/userguide/metrics-server.html)
-
-```bash
-kubectl top pods
-kubectl top nodes
-```
-
-Ensure that nodes has permissions to send metrics to cloudwatch [here](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-prerequisites.html) by attaching the following aws managed policy to nodes.
-
-```ts
-CloudWatchAgentServerPolicy;
-```
-
-Follow [this](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-setup-EKS-quickstart.html) to quick start create CloudWatch agent and Fluentbit which send metrics and logs to CloudWatch
-
-```bash
-ClusterName=EksDemo
-RegionName=us-east-1
-FluentBitHttpPort='2020'
-FluentBitReadFromHead='Off'
-[[${FluentBitReadFromHead} = 'On']] && FluentBitReadFromTail='Off'|| FluentBitReadFromTail='On'
-[[-z ${FluentBitHttpPort}]] && FluentBitHttpServer='Off' || FluentBitHttpServer='On'
-curl https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluent-bit-quickstart.yaml | sed 's/{{cluster_name}}/'${ClusterName}'/;s/{{region_name}}/'${RegionName}'/;s/{{http_server_toggle}}/"'${FluentBitHttpServer}'"/;s/{{http_server_port}}/"'${FluentBitHttpPort}'"/;s/{{read_from_head}}/"'${FluentBitReadFromHead}'"/;s/{{read_from_tail}}/"'${FluentBitReadFromTail}'"/' | kubectl apply -f -
-```
-
-delete the Container Insight
-
-```bash
-curl https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluent-bit-quickstart.yaml | sed 's/{{cluster_name}}/'${ClusterName}'/;s/{{region_name}}/'${LogRegion}'/;s/{{http_server_toggle}}/"'${FluentBitHttpServer}'"/;s/{{http_server_port}}/"'${FluentBitHttpPort}'"/;s/{{read_from_head}}/"'${FluentBitReadFromHead}'"/;s/{{read_from_tail}}/"'${FluentBitReadFromTail}'"/' | kubectl delete -f -
-```
-
-## Kube Config
-
-create kube config (if you already deleted it)
-
-```bash
-aws eks update-kubeconfig --region region-code --name my-cluster
-```
-
-if the cluster created by CDK or cloudformation, so we need to update the kube configu with the execution role.
+Since the cluster created by CloudFormation, we need to run kube config update before can run kubectl from our terminal. Find the cloudformation execution role from aws console, then replace below role arn with the CF exection role.
 
 ```bash
 aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445566:role/yyyyy
 ```
 
-there are some ways to find the role arn
-
-- from cloudformation CDK bootstrap
-- from CDK terminal output
-- query EKS cluster loggroup given that authenticator log enabled
-
-or check output of cloudformation for CdkEksFargateStack 
-- this role is binded as admin in Kubernetes 
-- need to add policies (ListClusters) before can use it in AWS console 
-
-
-ensure than the execution role can be assumed by AWS account from your termial
+Make sure that the role which your terminal assuming has a trust relationship with the CF execution role
 
 ```json
 {
@@ -583,161 +1125,46 @@ ensure than the execution role can be assumed by AWS account from your termial
 }
 ```
 
-## Troubleshotting
+Since the EKS cluster is created by an CloudFormation execution role, we need to take note
 
-Ensure that the role which used to create the EKS cluster and the role used to access the cluster are the same. In case of CDK deploy, the output from CDK terminal look like this
+- Update kube config with the role before running kubectl
+- Ensure that your terminal can assume the CF execution role (trust policy)
+- Assume the CF execution role, aws configure before running eksctl
 
-```bash
-Outputs:
-ClusterConfigCommand43AAE40F = aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445566:role/yyyyy
-
-```
-
-copy and run the update config command
+Rolling update a deployment in Kubernetes
 
 ```bash
-aws eks update-kubeconfig --name cluster-xxxxx --role-arn arn:aws:iam::112233445566:role/yyyyy
-Added new context arn:aws:eks:rrrrr:112233445566:cluster/cluster-xxxxx to /home/boom/.kube/config
-```
-
-Shell into a busybox and wget the service
-
-```bash
-kubectl run busybox --image=busybox --rm -it --command -- bin/sh
-```
-
-After using CDK to deploy a yaml manifest,
-
-```ts
-cluster.addManifest("HelloDeployment", deployment);
-```
-
-then if we update the deployment yaml and CDK deploy againt, [error appear](https://github.com/aws/aws-cdk/issues/15072), this is due to mismatch, hardcode of Lambda layer, please fix it
-
-```bash
-npm install @aws-cdk/lambda-layer-kubectl-v24
-```
-
-then update cluster stack
-
-```ts
- version: aws_eks.KubernetesVersion.V1_24,
-kubectlLayer: new KubectlV24Layer(this, "kubectlLayer")
-```
-
-## AutoScaler and Load Test  
-
-Install the AutoScaler, for simple demo 
-
-- Update role for ec2 node, so it can scale the autoscaling group 
-- More secure way is to use service account 
-- Install AutoScaler by reading yaml and add to the cluster by CDK 
-
-Update role for ec2 node 
-
-```ts
-const policyStatement = new iam.PolicyStatement();
-policyStatement.addResources("*");
-policyStatement.addActions(
-  "autoscaling:DescribeAutoScalingGroups",
-  "autoscaling:DescribeAutoScalingInstances",
-  "autoscaling:DescribeLaunchConfigurations",
-  "autoscaling:DescribeTags",
-  "autoscaling:SetDesiredCapacity",
-  "autoscaling:TerminateInstanceInAutoScalingGroup",
-  "ec2:DescribeLaunchTemplateVersions"
-);
-
-// create the policy based on the statements
-const policy = new iam.Policy(this, "cluster-autoscaler-policy", {
-  policyName: "ClusterAutoscalerPolicy",
-  statements: [policyStatement],
-});
-```
-
-Update autoscaling tags 
-
-```ts 
-props.nodeGroups.forEach((element) => {
-  new Tag(
-    "k8s.io/cluster-autoscaler/" + props.cluster.clusterName,
-    "owned",
-    { applyToLaunchedInstances: true }
-  );
-
-  new Tag("k8s.io/cluster-autoscaler/enabled", "true", {
-    applyToLaunchedInstances: true,
-  });
-  policy.attachToRole(element.role);
-});
-```
-
-Read AutoScaler yaml 
-
-```ts 
-readYamlFile(
-  path.join(__dirname, "./../yaml/cluster-autoscaler-autodiscover.yaml"),
-  cluster
-);
-```
-
-Add the AutoScaler to cluster using CDK 
-
-```ts 
-const autoScaler = new AutoScalerHemlStack(app, "AutoScalerHemlStack", {
-  cluster: eks.cluster,
-  nodeGroups: eks.nodeGroups,
-});
-autoScaler.addDependency(eks);
-```
-
-For load test, prepare a few things 
-
-- Update the cdk8s-app/dist/deployemt.yaml to max 1000 pods 
-- Update the Nodegroup with max 20 instances 
-- Artillery load test with 500 threads 
-- Check autoscaling console to the activity 
-
-
-```bash
-artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
-kubect get hpa --watch
-kubect top pod -n default
-kubect top node
+kubectl rollout restart deployment/flask-app-deployment
 ```
 
 ## Reference
 
-- [amazon eks cdk](https://aws.amazon.com/blogs/architecture/field-notes-managing-an-amazon-eks-cluster-using-aws-cdk-and-cloud-resource-property-manager/)
+- [Setup Container Insights](https://repost.aws/knowledge-center/cloudwatch-container-insights-eks-fargate)
 
-- [cdk chart example](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_eks-readme.html#cdk8s-charts)
+- [Container Insights Fargate](https://aws-otel.github.io/docs/getting-started/container-insights/eks-fargate)
 
-- [aws managed node group](https://aws.amazon.com/blogs/containers/leveraging-amazon-eks-managed-node-group-with-placement-group-for-low-latency-critical-applications/)
+- [Fluent-bit EKS Fargate](https://aws.amazon.com/blogs/containers/fluent-bit-for-amazon-eks-on-aws-fargate-is-here/)
 
-- [kubernetes pod select node label](https://kubernetes.io/docs/tasks/configure-pod-container/assign-pods-nodes/)
+- [Node Selector Fluent-bit not in Fargate](https://github.com/aws/amazon-vpc-cni-Kubernetes/blob/master/config/master/aws-Kubernetes-cni-cn.yaml#L100)
 
-- [kube config update](https://docs.aws.amazon.com/eks/latest/userguide/create-kubeconfig.html)
+- [eksctl Service Account](https://aws.amazon.com/blogs/containers/introducing-amazon-cloudwatch-container-insights-for-amazon-eks-fargate-using-aws-distro-for-opentelemetry/)
 
-- [install metrics server](https://docs.aws.amazon.com/eks/latest/userguide/metrics-server.html)
+- [Fargate Profile CPU and Mem](https://docs.aws.amazon.com/eks/latest/userguide/fargate-pod-configuration.html)
 
-- [CDK EKS workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/c15012ac-d05d-46b1-8a4a-205e7c9d93c9/en-US/40-deploy-clusters/300-container/330-chart)
+- [AutoScaler reaction time](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#how-can-i-modify-cluster-autoscaler-reaction-time)
 
-- [read yaml file](https://github.com/yjw113080/aws-cdk-eks-multi-region-skeleton/blob/master/utils/read-file)
+- [Prometheus Operator Blog](https://blog.container-solutions.com/prometheus-operator-beginners-guide)
 
-- [error lambda KubectlLayer](https://github.com/aws/aws-cdk/issues/15072)
+- [Service HTTPS](https://repost.aws/knowledge-center/eks-apps-tls-to-activate-https)
 
-- [fix error lambda KubectlLayer](https://github.com/cdklabs/awscdk-asset-kubectl)
+- [EKS HTTPS](https://repost.aws/knowledge-center/terminate-https-traffic-eks-acm)
 
-- [kubenetes reserved cpu](https://github.com/awslabs/amazon-eks-ami/pull/367)
+## Jupyter Notebook
 
-- [KuberServed resource](https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/)
-
-- [aws-auth configmap](https://docs.aws.amazon.com/eks/latest/userguide/add-user-role.html)
-
-- [system:master kubernetes](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
 ```
-CdkEksFargateStack.EksClusterLevel2ClusterName5A4A7685 = EksClusterLevel2
-CdkEksFargateStack.EksClusterLevel2ConfigCommand393D8FC7 = aws eks update-kubeconfig --name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
-CdkEksFargateStack.EksClusterLevel2GetTokenCommandA1DFFD22 = aws eks get-token --cluster-name EksClusterLevel2 --region us-west-2 --role-arn arn:aws:iam::002123586681:role/CdkEksFargateStack-EksClusterLevel2MastersRole40A1-PF3HKRBKGN9F
+http://a2392d969c12f4e54ad1339d701fff9e-1597214113.ap-southeast-1.elb.amazonaws.com/lab?token=353fa7be714cfe810cf60a37be95488000ceb9398f111444
 ```
- 
+
+```bash
+aws eks update-kubeconfig --name EksClusterLevel1 --role-arn arn:aws:iam::392194582387:role/cdk-hnb659fds-cfn-exec-role-392194582387-ap-southeast-1
+```

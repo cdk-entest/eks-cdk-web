@@ -1,4 +1,4 @@
-ClusterName=EksClusterLevel2
+ClusterName=EksClusterLevel1
 RegionName=us-west-2
 FluentBitHttpPort='2020'
 FluentBitReadFromHead='Off'

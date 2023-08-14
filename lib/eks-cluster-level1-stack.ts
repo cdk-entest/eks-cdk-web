@@ -1,4 +1,11 @@
-import { Stack, StackProps, aws_ec2, aws_eks, aws_iam } from "aws-cdk-lib";
+import {
+  CfnResource,
+  Stack,
+  StackProps,
+  aws_ec2,
+  aws_eks,
+  aws_iam,
+} from "aws-cdk-lib";
 import { Construct } from "constructs";
 
 interface EksClusterProps extends StackProps {
@@ -11,10 +18,11 @@ export class EksClusterStack extends Stack {
   constructor(scope: Construct, id: string, props: EksClusterProps) {
     super(scope, id, props);
 
-    const subnets: string[] = props.vpc.publicSubnets.map((subnet) =>
+    const subnets: string[] = props.vpc.privateSubnets.map((subnet) =>
       subnet.subnetId.toString()
     );
 
+    // cluster role
     const role = new aws_iam.Role(
       this,
       `RoleForEksCluster-${props.clusterName}`,
@@ -28,6 +36,7 @@ export class EksClusterStack extends Stack {
       aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEKSClusterPolicy")
     );
 
+    // create eks cluster using level 1 CDK construct same as CF
     const cluster = new aws_eks.CfnCluster(
       this,
       `EksCluster-${props.clusterName}`,
@@ -92,6 +101,7 @@ export class EksClusterStack extends Stack {
       }
     );
 
+    // attach policies for node role
     nodeRole.addManagedPolicy(
       aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
         "AmazonEKSWorkerNodePolicy"
@@ -106,6 +116,40 @@ export class EksClusterStack extends Stack {
 
     nodeRole.addManagedPolicy(
       aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEKS_CNI_Policy")
+    );
+
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "CloudWatchAgentServerPolicy"
+      )
+    );
+
+    // add inline policy to work with auto-scaling group
+    nodeRole.addToPolicy(
+      new aws_iam.PolicyStatement({
+        effect: aws_iam.Effect.ALLOW,
+        actions: [
+          "autoscaling:DescribeAutoScalingGroups",
+          "autoscaling:DescribeAutoScalingInstances",
+          "autoscaling:DescribeLaunchConfigurations",
+          "autoscaling:DescribeTags",
+          "autoscaling:SetDesiredCapacity",
+          "autoscaling:TerminateInstanceInAutoScalingGroup",
+          "ec2:DescribeLaunchTemplateVersions",
+        ],
+        resources: ["*"],
+      })
+    );
+
+    // optional: update auto-scaling group tags
+
+    // access s3 and polly
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonS3FullAccess")
+    );
+
+    nodeRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonPollyFullAccess")
     );
 
     // aws managed nodegroup
@@ -126,16 +170,16 @@ export class EksClusterStack extends Stack {
         instanceTypes: ["t2.medium"],
         diskSize: 50,
         // ssh remote access
-        remoteAccess: {
-          ec2SshKey: "eks-node-ssh",
-        },
+        // remoteAccess: {
+        //   ec2SshKey: "eks-node-ssh",
+        // },
         // scaling configuration
         scalingConfig: {
           desiredSize: 2,
-          maxSize: 5,
+          maxSize: 22,
           minSize: 1,
         },
-        // update configuration
+        // update configuration rolling update
         updateConfig: {
           maxUnavailable: 1,
           // maxUnavailablePercentage: 30,
@@ -147,7 +191,89 @@ export class EksClusterStack extends Stack {
       }
     );
 
+    // fargate profile
+    const podRole = new aws_iam.Role(
+      this,
+      `RoleForFargatePod-${props.clusterName}`,
+      {
+        roleName: `RoleForFargatePod-${props.clusterName}`,
+        assumedBy: new aws_iam.ServicePrincipal(
+          "eks-fargate-pods.amazonaws.com"
+        ),
+      }
+    );
+
+    podRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "AmazonEKSFargatePodExecutionRolePolicy"
+      )
+    );
+
+    podRole.addManagedPolicy(
+      aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "CloudWatchAgentServerPolicy"
+      )
+    );
+
+    // fargate profile for app
+    const appFargateProfile = new aws_eks.CfnFargateProfile(
+      this,
+      "FirstFargateProfileDemo1",
+      {
+        clusterName: cluster.name!,
+        podExecutionRoleArn: podRole.roleArn,
+        selectors: [
+          {
+            namespace: "demo",
+            labels: [
+              {
+                key: "environment",
+                value: "dev",
+              },
+            ],
+          },
+        ],
+        fargateProfileName: "demo",
+        // default all private subnet in the vpc
+        subnets: subnets,
+        tags: [
+          {
+            key: "name",
+            value: "test",
+          },
+        ],
+      }
+    );
+
+    // fargate profile for monitor
+    //    const monitorFargateProfile = new aws_eks.CfnFargateProfile(
+    //      this,
+    //      "MonitorFargateProfile",
+    //      {
+    //        clusterName: cluster.name!,
+    //        podExecutionRoleArn: podRole.roleArn,
+    //        selectors: [
+    //          {
+    //            namespace: "fargate-container-insights",
+    //            labels: [],
+    //          },
+    //        ],
+    //        fargateProfileName: "monitor",
+    //        // default all private subnet in the vpc
+    //        subnets: subnets,
+    //        tags: [
+    //          {
+    //            key: "name",
+    //            value: "test",
+    //          },
+    //        ],
+    //      }
+    //    );
+
     // dependencies
+    cluster.addDependency(role.node.defaultChild as CfnResource);
     nodegroup.addDependency(cluster);
+    //    monitorFargateProfile.addDependency(cluster);
+    appFargateProfile.addDependency(cluster);
   }
 }

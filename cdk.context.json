@@ -1,0 +1,59 @@
+{
+  "availability-zones:account=642644951129:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "availability-zones:account=700267065772:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "availability-zones:account=611078129384:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "availability-zones:account=351026122654:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "availability-zones:account=521846034096:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "availability-zones:account=521846034096:region=us-west-2": [
+    "us-west-2a",
+    "us-west-2b",
+    "us-west-2c",
+    "us-west-2d"
+  ],
+  "availability-zones:account=002123586681:region=us-west-2": [
+    "us-west-2a",
+    "us-west-2b",
+    "us-west-2c",
+    "us-west-2d"
+  ],
+  "availability-zones:account=916295805103:region=ap-southeast-1": [
+    "ap-southeast-1a",
+    "ap-southeast-1b",
+    "ap-southeast-1c"
+  ]
+}
