@@ -295,7 +295,9 @@ const appFargateProfile = new aws_eks.CfnFargateProfile(
 );
 ```
 
-## AutoScaler
+## Cluster AutoScaler
+
+![eks_ca](https://github.com/cdk-entest/eks-cdk-web/assets/20411077/9cdc3601-9393-4a4f-a598-ed87c19f0de2)
 
 How scale up work?
 
