@@ -442,11 +442,11 @@ It is possible to use a domain registered in another account and create Route53 
 apiVersion: v1
 kind: Service
 metadata:
-  name: flask-app-service
+  name: book-app-service
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
-    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:ap-southeast-1:$ACCOUNT:certificate/$ID"
-    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:ap-southeast-1:$ACCOUNT_ID:certificate/xxx
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: https
 spec:
   ports:
     - port: 80
@@ -456,26 +456,26 @@ spec:
       targetPort: 8080
       name: https
   selector:
-    app: flask-app
+    app: book-app
   type: LoadBalancer
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: flask-app-deployment
+  name: book-app-deployment
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: flask-app
+      app: book-app
   template:
     metadata:
       labels:
-        app: flask-app
+        app: book-app
     spec:
       containers:
-        - image: $ACCOUNT.dkr.ecr.ap-southeast-1.amazonaws.com/flask-app:latest
-          name: flask-app
+        - image: $ACCOUNT_ID.dkr.ecr.ap-southeast-1.amazonaws.com/book-app:latest
+          name: book-app
           ports:
             - containerPort: 8080
           resources:
@@ -487,7 +487,7 @@ spec:
 apiVersion: autoscaling/v2beta2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: flask-app-hpa
+  name: book-app-hpa
 spec:
   maxReplicas: 1000
   metrics:
@@ -501,7 +501,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: flask-app-deployment
+    name: book-app-deployment
 ```
 
 TODO: image here
