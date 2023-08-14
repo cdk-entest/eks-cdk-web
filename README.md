@@ -423,7 +423,7 @@ Monitor logs of the AutoScaler
 kubectl -n kube-system logs -f deployment.apps/cluster-autoscaler
 ```
 
-## HTTPS Service
+## Polly App HTTPS
 
 It is possible to use a domain registered in another account and create Route53 record in this account.
 
