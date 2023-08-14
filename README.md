@@ -1,21 +1,22 @@
 ---
-title: launch an amazon eks cluster with cdk
+title: deploy polly app and scale on amazon eks
 author: haimtran
-descripton: use cdk to create an amazon eks cluster
+descripton: deploy polly app and scale on amazon eks
 publishedDate: 24/04/2023
 date: 24/04/2023
 ---
 
 ## Introduction
 
-[Github](https://github.com/cdk-entest/eks-cdk-launch) shows essential components of an Amazon EKS cluster
+[Github](https://github.com/cdk-entest/eks-cdk-web/tree/master) shows how to deploy a simple webapp and scale it on amazon eks
 
-- Essential Networking
-- Essential Scurity
-- Launch an EKS Cluster
-- Deploy [the First App](https://github.com/cdk-entest/eks-cdk-launch/blob/master/yaml/hello-service.yaml)
+- Amazon EKS architecture
+- Launch an EKS cluster using CDK
+- Setup HPA and CA
+- Deploy the polly webapp
+- Scale the polly webapp
 
-## Architecture
+## Amazon EKS Architecture
 
 ![arch](https://user-images.githubusercontent.com/20411077/234173084-3deb3197-cbab-4471-bbff-497c7d6758d9.png)
 
@@ -100,9 +101,7 @@ vpc.addInterfaceEndpoint("STSVpcEndpoint", {
 
 ## Cluster Stack
 
-create an EKS cluster using CDK level 1 (equivalent to CloudFormation template)
-
-select subnets where to place the worker nodes
+Let create an EKS cluster using CDK level 1 (equivalent to CloudFormation template). Select subnets where to place the worker nodes
 
 ```ts
 const subnets: string[] = props.vpc.publicSubnets.map((subnet) =>
@@ -296,221 +295,6 @@ const appFargateProfile = new aws_eks.CfnFargateProfile(
 );
 ```
 
-## Node Selector
-
-When an EKS cluster consists of EC2 nodegroup and Fargate profile, in some cases, we want to select specific pods to run some pods. To do that, we can use node labels, node selector, or affinity. For example, as Fargate profile does not support deamonset, we can select only EC2 nodes to launch deamon set as the following
-
-```yaml
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: eks.amazonaws.com/compute-type
-              operator: NotIn
-              values:
-                - fargate
-```
-
-show labels of nodes
-
-```bash
-kubect get nodes --show-labels
-```
-
-## Cluster Authentication
-
-- Kubernetes Role
-- Kubernetes RoleBinding
-- AWS IAM and RBAC
-
-Kubernetes Role to setup permissions or what actions are allowed
-
-```yaml
-apiVersion: rbac.authorization.Kubernetes.io/v1
-kind: Role
-metadata:
-  creationTimestamp: null
-  namespace: default
-  name: dev-role
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services"]
-    verbs: ["get", "list", "patch", "update", "watch"]
-```
-
-Kubernetes RoleBinding to bind an identity (group or user) with the Role
-
-```yaml
-apiVersion: rbac.authorization.Kubernetes.io/v1
-kind: RoleBinding
-metadata:
-  creationTimestamp: null
-  name: dev-role-binding
-  namespace: default
-subjects:
-  - kind: User
-    name: developer
-    apiGroup: rbac.authorization.Kubernetes.io
-roleRef:
-  kind: Role
-  name: dev-role
-  apiGroup: rbac.authorization.Kubernetes.io
-```
-
-Update the aws-auth configmap
-
-```bash
-kubectl edit -n kube-system configmap/aws-auth
-```
-
-An example of the aws-auth, mapping role to user and groups
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: aws-auth
-  namespace: kube-system
-data:
-  mapRoles: |
-    - rolearn: xxx 
-      username: developer 
-    - rolearn: <ARN of instance role (not instance profile)>
-      username: system:node:{{EC2PrivateDNSName}}
-      groups:
-        - system:bootstrappers
-        - system:nodes
-```
-
-Using eksctl as recommended by aws docs
-
-```bash
-eksctl delete iamidentitymapping \
---region=$Region \
---cluster=$ClusterName \
---arn=$Role \
-```
-
-Update the kube config
-
-```bash
-aws eks update-kubeconfig --name $ClusterName --role-arn $ROLE
-```
-
-## Service Account
-
-Quoted from [docs](https://docs.aws.amazon.com/eks/latest/userguide/service-accounts.html): _A Kubernetes service account provides an identity for processes that run in a Pod_. There are some use cases to understand
-
-- A process in a pod want to access data in S3, DynamoDB
-- ALB Controller create a ALB controller in AWS
-- Amazon EBS CSI Drive add-on creates presistent storate (EBS volumnes) in AWS
-- AutoScaler trigger Auto Scaling Group in AWS
-
-Essential components when setting up a service account for Kubernetes. In short, a service account in Kubernetes need to assume an IAM role to access to AWS services.
-
-- OIDC Identity: the EKS cluster should have an OpenID Connect provider
-- IAM Identity Provider
-- Trust Policy: the process should be able to assume a role in AWS IAM
-- ServiceAccount: create a service account in Kubernetes
-- ServiceAccount: annotate the service account with the IAM role arn
-
-Let consider two example
-
-- Example 1: setup permissions for the EBS CSI Driver add-on
-- Example 2: setup permissions for ADOT-Collector
-
-In example 1, the driver need to create EBS volumnes in AWS services.
-
-- Step 1. Create a service account in Kubernetes
-- Step 2. Create Identity Provider in AWS IAM
-- Step 3. Create an IAM role in AWS IAM
-
-Step 1. Create a service account in Kubernetes. In this case, the service account **ebs-csi-controller-sa** already created when installing the add-on.
-
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::$ACCOUNT:role/AmazonEKS_EBS_CSI_Driver
-  creationTimestamp: "2023-05-13T06:11:46Z"
-  labels:
-    app.kubernetes.io/component: csi-driver
-    app.kubernetes.io/managed-by: EKS
-    app.kubernetes.io/name: aws-ebs-csi-driver
-    app.kubernetes.io/version: 1.18.0
-  name: ebs-csi-controller-sa
-  namespace: kube-system
-  resourceVersion: "66136"
-```
-
-Step 2. Create Identity Provider in AWS IAM
-
-```bash
-eksctl utils associate-iam-oidc-provider \
---cluster=$CLUSTER_NAME \
---approve
-```
-
-Step 3. Create an IAM role to be assumed by the service account
-
-For example, create a role for the EBS CSI add-on. First, create a trust policy to allow the ID (OpenID Connect) assume the role
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::$ACCOUNT:oidc-provider/oidc.eks.$REGION.amazonaws.com/id/$OIDC_ID"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "oidc.ek$REGION.amazonaws.com/id/$OIDC_ID:aud": "sts.amazonaws.com",
-          "oidc.ek$REGION.amazonaws.com/id/$OIDC_ID:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
-        }
-      }
-    }
-  ]
-}
-```
-
-Second, add policies to the role, for example AWS managed **AmazonEBSCSIDriverPolicy** policy to the role.
-
-In example 2, the collector running in Faragte need permissions to send logs to AWS CloudWatch.
-
-- Step 1. Create service account in Kubernetes
-- Step 2. Create Identity Provider in AWS IAM
-- Step 3. Create a Role in AWS IAM
-
-By using eksctl, three step can be done in two commands below. Under the hoold, eksctl will create a Lambda function which call kubernetes API server.
-
-```bash
-#!/bin/bash
-CLUSTER_NAME=EksClusterLevel1
-REGION=ap-southeast-1
-SERVICE_ACCOUNT_NAMESPACE=fargate-container-insights
-SERVICE_ACCOUNT_NAME=adot-collector
-SERVICE_ACCOUNT_IAM_ROLE=EKS-Fargate-ADOT-ServiceAccount-Role
-SERVICE_ACCOUNT_IAM_POLICY=arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
-
-eksctl utils associate-iam-oidc-provider \
---cluster=$CLUSTER_NAME \
---approve
-
-eksctl create iamserviceaccount \
---cluster=$CLUSTER_NAME \
---region=$REGION \
---name=$SERVICE_ACCOUNT_NAME \
---namespace=$SERVICE_ACCOUNT_NAMESPACE \
---role-name=$SERVICE_ACCOUNT_IAM_ROLE \
---attach-policy-arn=$SERVICE_ACCOUNT_IAM_POLICY \
---approve
-```
-
 ## AutoScaler
 
 How scale up work?
@@ -639,338 +423,6 @@ Monitor logs of the AutoScaler
 kubectl -n kube-system logs -f deployment.apps/cluster-autoscaler
 ```
 
-## Observability for EKS EC2
-
-There are serveral methods
-
-- Applications send logs
-- Sidecar container pattern
-- Node agent (the most common method)
-
-Depending on EC2 or Fargate, there are different tools
-
-- Container Insights: CloudWatch Agent and Fluent Bit installed per node
-- ADOT (AWS Distro for OpenTelemetry) works for both EC2 and Fargate
-
-As the cluster using both EC2 nodegroup and Faragate profile
-
-- Setup CloudWatch Agent and Fluent-bit for EC2 nodegroup
-- Setup ADOT for Faragate profile
-- Also need to setup the metric server
-
-How CloudWatch Agent and Fluent Bit work?
-
-- CloudWatch Agent installed per EC2 Node and collect metrics, then send to performance log group in CW
-- Fluent Bit send logs to log groups: host, application, dataplane
-
-Install metric sersver
-
-```yaml
-check the yaml/metric-server.yaml
-```
-
-Install CloudWatch Agent and Fluent-bit in EC2 Nodegroup
-
-- replace region with your target region
-- replace cluster-name with your cluster-name
-
-```yaml
-check the yaml/cwagent-fluent-bit.yaml
-```
-
-## Observability for EKS Fargate
-
-How ADOT works in Fargate?
-
-Quoted
-
-```
-The kubelet on a worker node in a Kubernetes cluster exposes resource metrics such as CPU, memory, disk, and network usage at the /metrics/cadvisor endpoint. However, in EKS Fargate networking architecture, a pod is not allowed to directly reach the kubelet on that worker node. Hence, the ADOT Collector calls the Kubernetes API Server to proxy the connection to the kubelet on a worker node, and collect kubelet’s cAdvisor metrics for workloads on that node.
-
-```
-
-- An ADOT Collector is installed in a Fargate box
-- The ADOT call the API server for metrics
-- The API server proxy to Kuberlete in each Fargate Box
-
-Install ADOT in Fargate profile:
-
-- assume the CF exection role
-- install iamserviceaccount by assuming CF exection role
-- install ADOT agent by using the default role
-
-To assume CF exection role
-
-```bash
-aws sts assume-role --role-arn 'arn:aws:xxx' --role-session-name eks
-```
-
-Then update the ~/.aws/credentials with recevied credentials, then run the below bash script
-
-```bash
-#!/bin/bash
-CLUSTER_NAME=EksClusterLevel1
-REGION=ap-southeast-1
-SERVICE_ACCOUNT_NAMESPACE=fargate-container-insights
-SERVICE_ACCOUNT_NAME=adot-collector
-SERVICE_ACCOUNT_IAM_ROLE=EKS-Fargate-ADOT-ServiceAccount-Role
-SERVICE_ACCOUNT_IAM_POLICY=arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
-
-eksctl utils associate-iam-oidc-provider \
---cluster=$CLUSTER_NAME \
---approve
-
-eksctl create iamserviceaccount \
---cluster=$CLUSTER_NAME \
---region=$REGION \
---name=$SERVICE_ACCOUNT_NAME \
---namespace=$SERVICE_ACCOUNT_NAMESPACE \
---role-name=$SERVICE_ACCOUNT_IAM_ROLE \
---attach-policy-arn=$SERVICE_ACCOUNT_IAM_POLICY \
---approve
-```
-
-After created the iamserviceaccount, use the default role to run below command
-
-```bash
-ClusterName=EksClusterLevel1
-REGION=ap-southeast-1
-curl https://raw.githubusercontent.com/aws-observability/aws-otel-collector/main/deployment-template/eks/otel-fargate-container-insights.yaml | sed 's/YOUR-EKS-CLUSTER-NAME/'${ClusterName}'/;s/us-east-1/'${Region}'/' | kubectl apply -f -
-```
-
-## Prometheus
-
-This section walk through steps to step up Prometheus
-
-- Prometheus components and methods to setup
-- Setup the EBS CSI Driver add-on with service account [here](https://cdk.entest.io/eks/service-account)
-- Setup Prometheus and Grafana using helm chart
-
-### Section 1. Components of Prometheus
-
-Check [docs](https://prometheus.io/docs/introduction/overview/)
-
-- Prometheus server
-- Alert manager
-- Pushgateway
-- Node exporter
-- PromQL, PrometheusUI, Grafana, API Clients
-
-### Section 2. Setup Prometheus
-
-There are several ways to setup monitoring with Prometheus, please read [docs](https://prometheus-operator.dev/docs/user-guides/getting-started/).
-
-- [Prometheus-community helm chart ](https://github.com/prometheus-community/helm-charts/tree/main)
-- [Kube-prometheus ](https://github.com/prometheus-operator/kube-prometheus)
-- [Prometheus operator](https://github.com/prometheus-operator)
-
-The easiest way is to use Prometheus community helm chart. First, add the repository
-
-```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-```
-
-List charts from the repository
-
-```bash
-helm search repo prometheus-community
-```
-
-Then install the Prometheus community helm chart with custom configuration
-
-```bash
-helm install my-prometheus prometheus-community/prometheus -f ./test/prometheus_values.yaml
-```
-
-There are two methods for metric collectioin configuration
-
-- Via ServiceMonitor and PodMonitor in Prometheus Operator [HERE](https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/user-guides/getting-started.md)
-- Via scrape_configs in prometheus.yaml [HERE](https://www.cncf.io/blog/2021/10/25/prometheus-definitive-guide-part-iii-prometheus-operator/)
-
-Forward port to see Prometheus server UI
-
-```bash
-kubectl port-forward deploy/prometheus-server 8080:9090 -n prometheus
-```
-
-First query with Prometheus
-
-```sql
-sum by (namespace) (kube_pod_info)
-```
-
-### Section 3. Prometheus and Granfana
-
-To install both Prometheus and Grafana, choose another release
-
-```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-helm install prometheus prometheus-community/kube-prometheus-stack -f ./test/prometheus_values.yaml
-```
-
-Then port-forward to login the Grafana UI
-
-```bash
-kubectl port-forward deploy/prometheus-grafana 8081:3000 -n prometheus
-```
-
-Find the password to login Grafana
-
-```bash
-kubectl get secret --namespace prometheus prometheus-grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo
-```
-
-Login Grafana UI, and go to the menu button, find
-
-- Dashboard and select Kubernetes/Compute Resources/ Pod and see
-- Explore, select code, and query with PromQL
-
-## Docker Image
-
-Let build a docker image to deploy the next.js app. Here is the dockerfile
-
-```
-# layer 1
-FROM node:lts as dependencies
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm install --frozen-lockfile
-
-# layer 2
-FROM node:lts as builder
-WORKDIR /app
-COPY . .
-COPY --from=dependencies /app/node_modules ./node_modules
-RUN npm run build
-
-# layer 3
-FROM node:lts as runner
-WORKDIR /app
-ENV NODE_ENV production
-
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-
-# run
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-The .dockerignore file
-
-```
-node_modules
-**/node_modules/
-.next
-.git
-```
-
-Let write a python script to automate build and push to aws ecr
-
-```py
-import os
-import subprocess
-
-# parameters
-REGION = "ap-southeast-1"
-ACCOUNT = "227135398356"
-
-# delete all docker images
-os.system("sudo docker system prune -a")
-
-# build next-app image
-os.system("sudo docker build -t next-app . ")
-
-#  aws ecr login
-os.system(f"aws ecr get-login-password --region {REGION} | sudo docker login --username AWS --password-stdin {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com")
-
-# get image id
-IMAGE_ID=os.popen("sudo docker images -q next-app:latest").read()
-
-# tag next-app image
-os.system(f"sudo docker tag {IMAGE_ID.strip()} {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/next-app:latest")
-
-# create ecr repository
-os.system(f"aws ecr create-repository --registry-id {ACCOUNT} --repository-name next-app")
-
-# push image to ecr
-os.system(f"sudo docker push {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/next-app:latest")
-
-# run locally to test
-os.system(f"sudo docker run -d -p 3000:3000 next-app:latest")
-```
-
-Run the container image locally to test it
-
-```bash
-sudo docker run -d -p 3000:3000 next-app:latest"
-```
-
-## Deploy in EKS
-
-Let deploy the next.js app in EKS, here is the yaml file. Please replace the ecr image path
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: next-app-service
-spec:
-  ports:
-    - port: 80
-      targetPort: 3000
-  selector:
-    app: next-app
-  type: LoadBalancer
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: next-app-deployment
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: next-app
-  template:
-    metadata:
-      labels:
-        app: next-app
-    spec:
-      containers:
-        - image: 227135398356.dkr.ecr.ap-southeast-1.amazonaws.com/next-app:latest
-          name: next-app
-          ports:
-            - containerPort: 3000
-          resources:
-            limits:
-              cpu: 500m
-            requests:
-              cpu: 500m
----
-apiVersion: autoscaling/v2beta2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: next-app-hpa
-spec:
-  maxReplicas: 1000
-  metrics:
-    - resource:
-        name: cpu
-        target:
-          averageUtilization: 5
-          type: Utilization
-      type: Resource
-  minReplicas: 2
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: next-app-deployment
-```
-
 ## HTTPS Service
 
 It is possible to use a domain registered in another account and create Route53 record in this account.
@@ -1066,6 +518,28 @@ describe a service
 describe service book-app-service
 ```
 
+## Node Selector
+
+When an EKS cluster consists of EC2 nodegroup and Fargate profile, in some cases, we want to select specific pods to run some pods. To do that, we can use node labels, node selector, or affinity. For example, as Fargate profile does not support deamonset, we can select only EC2 nodes to launch deamon set as the following
+
+```yaml
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: eks.amazonaws.com/compute-type
+              operator: NotIn
+              values:
+                - fargate
+```
+
+show labels of nodes
+
+```bash
+kubect get nodes --show-labels
+```
+
 ## Troubleshooting
 
 - cloudformation execution role
@@ -1158,13 +632,3 @@ kubectl rollout restart deployment/flask-app-deployment
 - [Service HTTPS](https://repost.aws/knowledge-center/eks-apps-tls-to-activate-https)
 
 - [EKS HTTPS](https://repost.aws/knowledge-center/terminate-https-traffic-eks-acm)
-
-## Jupyter Notebook
-
-```
-http://a2392d969c12f4e54ad1339d701fff9e-1597214113.ap-southeast-1.elb.amazonaws.com/lab?token=353fa7be714cfe810cf60a37be95488000ceb9398f111444
-```
-
-```bash
-aws eks update-kubeconfig --name EksClusterLevel1 --role-arn arn:aws:iam::392194582387:role/cdk-hnb659fds-cfn-exec-role-392194582387-ap-southeast-1
-```
