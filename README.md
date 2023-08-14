@@ -295,6 +295,117 @@ const appFargateProfile = new aws_eks.CfnFargateProfile(
 );
 ```
 
+## Horizontal Pod AutoScaler
+
+<LinkedImage alt="eks hpa" src="/thumbnail/eks_hpa.png" />
+
+The HPA scales based on default or custom (external) metrics. How it works?
+
+- Metrics are specified in the HPA definition
+- Once during the period (15 seconds), the controller manager queries the metrics
+- HPA access and adjust the scale parameter in Deployment or StatefulSet
+
+It is possible to setup custom metrics, such as SQS length from AWS CloudWatch, or use a Lambda functionn to trigger Kubernetes scale via updating, setting Deployment, StatefulSet with a new number of replica . There are important parameters
+
+- [horizontal-pod-autoscaler-sync-period]() default is 15 seconds
+- [horizontal-pod-autoscaler-initial-readiness-delay] default 30 seconds
+- [horizontal-pod-autoscaler-cpu-initialization-period] default 5 minutes
+- [horizontal-pod-autoscaler-downscale-stabilization] of stabilization window default is 300 seconds
+- [Stabilization Window](https://github.com/kubernetes/enhancements/blob/master/keps/sig-autoscaling/853-configurable-hpa-scale-velocity/README.md#stabilization-window)
+
+[Scaling algorithm](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+
+- ceil[currentReplicas * (Current / Desired)]
+
+First, setup metrics server which monitor CPU usage
+
+```ts
+export class MetricServerStack extends Stack {
+  constructor(scope: Construct, id: string, props: MetricServerProps) {
+    super(scope, id, props);
+
+    const cluster = props.cluster;
+
+    readYamlFile(path.join(__dirname, "./../yaml/metric_server.yaml"), cluster);
+  }
+}
+```
+
+deploy a HPA
+
+```yaml
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cdk8s-app-webhorizontalautoscaler-c82a277e
+spec:
+  maxReplicas: 1000
+  metrics:
+    - resource:
+        name: cpu
+        target:
+          averageUtilization: 5
+          type: Utilization
+      type: Resource
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cdk8s-app-deployment-c8f953f2
+```
+
+For scaling based on custom metrics, there are some methods
+
+- CloudWatch => Adapter => External metrics => HPA
+- CloudWatch => Lambda => Update deployment
+
+External metrics example, this CRD resource tells the adapter how to retrieve metric data from CW
+
+```yaml
+apiVersion: metrics.aws/v1alpha1
+kind: ExternalMetric:
+  metadata:
+    name: hello-queue-length
+  spec:
+    name: hello-queue-length
+    resource:
+      resource: "deployment"
+    queries:
+      - id: sqs_helloworld
+        metricStat:
+          metric:
+            namespace: "AWS/SQS"
+            metricName: "ApproximateNumberOfMessagesVisible"
+            dimensions:
+              - name: QueueName
+                value: "helloworld"
+          period: 300
+          stat: Average
+          unit: Count
+        returnData: true
+```
+
+HPA based on the custom metric
+
+```yaml
+kind: HorizontalPodAutoscaler
+apiVersion: autoscaling/v2beta1
+metadata:
+  name: sqs-consumer-scaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1beta1
+    kind: Deployment
+    name: sqs-consumer
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: External
+      external:
+        metricName: hello-queue-length
+        targetAverageValue: 30
+```
+
 ## Cluster AutoScaler
 
 ![eks_ca](https://github.com/cdk-entest/eks-cdk-web/assets/20411077/9cdc3601-9393-4a4f-a598-ed87c19f0de2)
@@ -364,68 +475,13 @@ props.nodeGroups.forEach((element) => {
 });
 ```
 
-Install AutoScaler by kubectl. Download the yaml and replace YOUR CLUSTER NAME with the cluster name Optionall, use affinity to launch this AutoScaler to the EC2 nodegroup only, no Faragte profile.
-
-```bash
-curl -O https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml
-```
-
 Install AutoScaler using kubectl
 
 ```bash
-kubect apply -f cluster-autoscaler-autodiscover.yaml
+kubect apply -f yaml/cluster-autoscaler-autodiscover.yaml
 ```
 
-In case of CDK Construct level 2, it is possible to deploy the AutoScaler yaml by adding manifest to the cluster
-
-```ts
-readYamlFile(
-  path.join(__dirname, "./../yaml/cluster-autoscaler-autodiscover.yaml"),
-  cluster
-);
-```
-
-Add the AutoScaler to cluster using CDK
-
-```ts
-const autoScaler = new AutoScalerHemlStack(app, "AutoScalerHemlStack", {
-  cluster: eks.cluster,
-  nodeGroups: eks.nodeGroups,
-});
-autoScaler.addDependency(eks);
-```
-
-Also update the scaling configuration of the nodegroup
-
-```ts
-  scalingConfig: {
-          desiredSize: 2,
-          maxSize: 22,
-          minSize: 1,
-        },
-```
-
-For load test, prepare a few things
-
-- Update the cdKubernetes-app/dist/deployemt.yaml to max 1000 pods
-- Update the Nodegroup with max 20 instances
-- Artillery load test with 500 threads
-- Check autoscaling console to the activity
-
-```bash
-artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
-kubect get hpa --watch
-kubect top pod -n default
-kubect top node
-```
-
-Monitor logs of the AutoScaler
-
-```bash
-kubectl -n kube-system logs -f deployment.apps/cluster-autoscaler
-```
-
-## Polly App HTTPS
+## Book App Service
 
 It is possible to use a domain registered in another account and create Route53 record in this account.
 
@@ -518,6 +574,28 @@ describe a service
 
 ```bash
 describe service book-app-service
+```
+
+## Load Test
+
+For load test, prepare a few things
+
+- Update the cdKubernetes-app/dist/deployemt.yaml to max 1000 pods
+- Update the Nodegroup with max 20 instances
+- Artillery load test with 500 threads
+- Check autoscaling console to the activity
+
+```bash
+artillery quick --num 10000 --count 100 "http://$ELB_ENDPOINT"
+kubect get hpa --watch
+kubect top pod -n default
+kubect top node
+```
+
+Monitor logs of the AutoScaler
+
+```bash
+kubectl -n kube-system logs -f deployment.apps/cluster-autoscaler
 ```
 
 ## Node Selector
@@ -615,21 +693,33 @@ kubectl rollout restart deployment/flask-app-deployment
 
 ## Reference
 
-- [Setup Container Insights](https://repost.aws/knowledge-center/cloudwatch-container-insights-eks-fargate)
+- [HPA Introduction](https://aws.amazon.com/blogs/opensource/horizontal-pod-autoscaling-eks/)
 
-- [Container Insights Fargate](https://aws-otel.github.io/docs/getting-started/container-insights/eks-fargate)
+- [Kubernetes HPA](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
 
-- [Fluent-bit EKS Fargate](https://aws.amazon.com/blogs/containers/fluent-bit-for-amazon-eks-on-aws-fargate-is-here/)
+- [EKS scale based on CW metrics](https://aws.amazon.com/blogs/compute/scaling-kubernetes-deployments-with-amazon-cloudwatch-metrics/)
+
+- [HPA parameters](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/#support-for-custom-metrics)
+
+- [Lambda trigger scale](https://aws.amazon.com/blogs/containers/autoscaling-amazon-eks-services-based-on-custom-prometheus-metrics-using-cloudwatch-container-insights/)
+
+- [ECS custom metrics scale](https://aws.amazon.com/blogs/containers/amazon-elastic-container-service-ecs-auto-scaling-using-custom-metrics/)
+
+- [EKS Fargate scale on custom metrics](https://aws.amazon.com/blogs/containers/autoscaling-eks-on-fargate-with-custom-metrics/)
+
+- [Setup AutoScaler](https://docs.aws.amazon.com/eks/latest/userguide/autoscaling.html)
+
+- [Stabilization Window](https://github.com/kubernetes/enhancements/blob/master/keps/sig-autoscaling/853-configurable-hpa-scale-velocity/README.md#stabilization-window)
+
+- [Scaling algorithm](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+
+- [My Note ](https://d2cvlmmg8c0xrp.cloudfront.net/book/amazon_eks_auto_scaling_haimtran.pdf)
 
 - [Node Selector Fluent-bit not in Fargate](https://github.com/aws/amazon-vpc-cni-Kubernetes/blob/master/config/master/aws-Kubernetes-cni-cn.yaml#L100)
-
-- [eksctl Service Account](https://aws.amazon.com/blogs/containers/introducing-amazon-cloudwatch-container-insights-for-amazon-eks-fargate-using-aws-distro-for-opentelemetry/)
 
 - [Fargate Profile CPU and Mem](https://docs.aws.amazon.com/eks/latest/userguide/fargate-pod-configuration.html)
 
 - [AutoScaler reaction time](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md#how-can-i-modify-cluster-autoscaler-reaction-time)
-
-- [Prometheus Operator Blog](https://blog.container-solutions.com/prometheus-operator-beginners-guide)
 
 - [Service HTTPS](https://repost.aws/knowledge-center/eks-apps-tls-to-activate-https)
 
