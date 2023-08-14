@@ -241,61 +241,9 @@ const nodegroup = new aws_eks.CfnNodegroup(this, "AWSManagedNodeGroupDemo", {
 });
 ```
 
-## Fargate Profile
-
-create pod role
-
-```ts
-const podRole = new aws_iam.Role(
-  this,
-  `RoleForFargatePod-${props.clusterName}`,
-  {
-    roleName: `RoleForFargatePod-${props.clusterName}`,
-    assumedBy: new aws_iam.ServicePrincipal("eks-fargate-pods.amazonaws.com"),
-  }
-);
-
-podRole.addManagedPolicy(
-  aws_iam.ManagedPolicy.fromAwsManagedPolicyName(
-    "AmazonEKSFargatePodExecutionRolePolicy"
-  )
-);
-```
-
-create a Fargate profile
-
-```ts
-const appFargateProfile = new aws_eks.CfnFargateProfile(
-  this,
-  "FirstFargateProfileDemo1",
-  {
-    clusterName: cluster.name!,
-    podExecutionRoleArn: podRole.roleArn,
-    selectors: [
-      {
-        namespace: "demo",
-        labels: [
-          {
-            key: "environment",
-            value: "dev",
-          },
-        ],
-      },
-    ],
-    fargateProfileName: "demo",
-    // default all private subnet in the vpc
-    subnets: subnets,
-    tags: [
-      {
-        key: "name",
-        value: "test",
-      },
-    ],
-  }
-);
-```
-
 ## Horizontal Pod AutoScaler
+
+![eks_hpa](https://github.com/cdk-entest/eks-cdk-web/assets/20411077/21acf4d5-2a8c-4eba-8d3d-ebac17baeb93)
 
 <LinkedImage alt="eks hpa" src="/thumbnail/eks_hpa.png" />
 
